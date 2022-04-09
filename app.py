@@ -6,6 +6,7 @@ import pygame.locals as G
 from Core.CEyeTracker import CEyeTracker
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
+from Core.CLearnablePredictor import CLearnablePredictor
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -35,18 +36,19 @@ class Colors:
   PURPLE = (255, 0, 255)
 
 class App:
-  def __init__(self, tracker, dataset):
+  def __init__(self, tracker, dataset, predictor):
     self._running = True
     self._speed = 55 * 2
     self._pos = (25, 25)
     self._goal = self._pos
     self._lastTracked = None
     self._lastPrediction = None
+    self._errorHistory = [0.0]
     
     self._tracker = tracker
     self._eyes = [None, None]
     self._dataset = dataset
-    self._predictor = lambda x: False
+    self._predictor = predictor
     return
   
   @property
@@ -82,12 +84,17 @@ class App:
     return
    
   def on_tick(self, deltaT):
+    wh = np.array(self._display_surf.get_size(), np.float32)
     tracked = self._tracker.track()
     if not(tracked is None):
-      # self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
-      # self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
-      self._dataset.store(tracked, np.array(self._pos))
-      self._lastTracked = (tracked, pygame.time.get_ticks())
+#       self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
+#       self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
+      self._dataset.store(tracked, np.array(self._pos) / wh)
+      self._lastTracked = {
+        'tracked': tracked, 
+        'time': pygame.time.get_ticks(),
+        'debugGoal': np.array(self._pos) / wh
+      }
       pass
     #####################
     if not(self._lastTracked is None):
@@ -95,6 +102,12 @@ class App:
       if prediction:
         self._lastPrediction = prediction
         self._lastTracked = None
+        
+        diff = np.subtract(prediction[0], prediction[1]['debugGoal'])
+        self._errorHistory.append(
+          np.sqrt(np.square(diff).sum())
+        )
+        self._errorHistory = self._errorHistory[-25:]
       pass
     #####################
     vec = normalized(np.subtract(self._goal, self._pos))[0]
@@ -109,7 +122,13 @@ class App:
     window = self._display_surf
     window.fill(Colors.SILVER)
     self._drawObject(tuple(int(x) for x in self._pos))
-    '''
+    
+    self._drawText(
+      '%.5f' % (np.mean(self._errorHistory)),
+      tuple(int(x) for x in self._pos),
+      Colors.RED
+    )
+
     if not (self._eyes[0] is None):
       x = pygame.transform.scale(self._eyes[0], (128, 128))
       window.blit(
@@ -123,8 +142,15 @@ class App:
         x,
         x.get_rect(topleft=window.get_rect().inflate(-10, -10 - 2*128).topleft)
       )
-    '''
+
     if not(self._lastPrediction is None):
+      pos, data, info = self._lastPrediction
+      
+      wh = np.array(self._display_surf.get_size())
+      pos = pos * wh
+      self._drawText(str(pos), (5, 5), Colors.BLACK)
+      self._drawObject(tuple(int(x) for x in pos), R=3, C=Colors.PURPLE)
+      self._drawText(str(info), (5, 95), Colors.BLACK)
       pass
     pygame.display.flip()
     return
@@ -155,8 +181,8 @@ class App:
     )
     return
 
-  def _drawObject(self, pos):
-    pygame.draw.circle(self._display_surf, Colors.WHITE, pos, 10, 0)
+  def _drawObject(self, pos, R=10, C=Colors.WHITE):
+    pygame.draw.circle(self._display_surf, C, pos, R, 0)
     return
   
   def _nextGoal(self):
@@ -173,8 +199,9 @@ class App:
   
 def main():
   with CThreadedEyeTracker() as tracker, CDataset() as dataset:
-    app = App(tracker, dataset)
-    app.run()
+    with CLearnablePredictor(dataset) as predictor:
+      app = App(tracker, dataset, predictor=predictor.async_infer)
+      app.run()
   pass
 
 if __name__ == '__main__':

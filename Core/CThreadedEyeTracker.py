@@ -1,5 +1,6 @@
 from Core.CEyeTracker import CEyeTracker
 import threading
+import time
 
 class CThreadedEyeTracker:
   def __init__(self):
@@ -33,5 +34,6 @@ class CThreadedEyeTracker:
       res = self._tracker.track()
       with self._lock:
         self._results = res
+      time.sleep(0) # idle
       continue
     return

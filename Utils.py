@@ -1,5 +1,15 @@
 import math
+import numpy as np
 from collections import defaultdict
+import cv2
+
+def limitGPUMemory(memory_limit):
+  import tensorflow as tf
+  gpus = tf.config.experimental.list_physical_devices('GPU')
+  tf.config.experimental.set_virtual_device_configuration(
+    gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+  )
+  return 
 
 FACE_PARTS_CONNECTIONS = {
   'lips': [
@@ -172,3 +182,23 @@ def decodeLandmarks(landmarks, HW, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
     points[idx] = (x_px, y_px)
     continue
   return points
+
+def tracked2sample(data):
+  points = np.full((468, 2), fill_value=-1, dtype=np.float32)
+  for idx, (x, y) in data['face points'].items():
+    points[idx, 0] = x
+    points[idx, 1] = y
+    continue
+  
+  return {
+    'points': points,
+    'left eye': cv2.cvtColor(data['left eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
+    'right eye': cv2.cvtColor(data['right eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
+  }
+
+def samples2inputs(samples):
+  return (
+    np.array([x['points'] for x in samples], np.float32) / 255.0,
+    np.array([x['left eye'] for x in samples], np.float32) / 255.0,
+    np.array([x['right eye'] for x in samples], np.float32) / 255.0,
+  )
