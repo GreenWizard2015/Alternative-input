@@ -35,7 +35,6 @@ def eyeEncoder(shape):
   )
 
 def simpleModel(pointsN=468, eyeSize=32):
-  # TODO: Try autoregressive approach i.e. pass in coordinates and try to predict more accurate position
   # TODO: Try NeRF-like approach i.e. predict some latent representation and "decode" into 2d probabilities map by sampling
   # f(latent, 0..1, 0..1)
   points = L.Input((pointsN, 2))
@@ -62,6 +61,37 @@ def simpleModel(pointsN=468, eyeSize=32):
   )
   return tf.keras.Model(
     inputs=[points, eyeL, eyeR],
+    outputs=[coords]
+  )
+
+def ARModel(pointsN=468, eyeSize=32):
+  position = L.Input((2, ))
+  points = L.Input((pointsN, 2))
+  eyeL = L.Input((eyeSize, eyeSize, 1))
+  eyeR = L.Input((eyeSize, eyeSize, 1))
+  
+  encoder = eyeEncoder(eyeL.shape[1:])
+  encodedL = encoder(L.Dropout(0.1)(eyeL))
+  encodedR = encoder(L.Dropout(0.1)(eyeR))
+  
+  pts = L.Flatten()(points)
+  pts = L.Concatenate(axis=-1)([ pts, position ])
+  encodedP = sMLP(shape=pts.shape[1:], sizes=[256, 128])(pts)
+      
+  combined = L.Concatenate(axis=-1)([
+    position,
+    encodedP,
+    L.Flatten()(encodedL),
+    L.Flatten()(encodedR),
+  ])
+  
+  coords = position + L.Dense(2, activation='linear')(
+    sMLP(shape=combined.shape[1:], sizes=[256, 128, 64, 32])(
+      combined
+    )
+  )
+  return tf.keras.Model(
+    inputs=[points, eyeL, eyeR, position],
     outputs=[coords]
   )
 

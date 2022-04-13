@@ -2,6 +2,7 @@ import math
 import numpy as np
 from collections import defaultdict
 import cv2
+import random
 
 def limitGPUMemory(memory_limit):
   import tensorflow as tf
@@ -183,12 +184,19 @@ def decodeLandmarks(landmarks, HW, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
     continue
   return points
 
-def tracked2sample(data):
+def tracked2sample(data, dropout=0.0):
   points = np.full((468, 2), fill_value=-1, dtype=np.float32)
   for idx, (x, y) in data['face points'].items():
     points[idx, 0] = x
     points[idx, 1] = y
     continue
+  
+  if 0 < dropout:
+    index = np.array(list(data['face points'].keys()))
+    np.random.shuffle(index)
+    index = index[:random.randint(0, int(len(index) * (1 - dropout))) + 1]
+    if 0 < len(index):
+      points[index] = -1
   
   return {
     'points': points,

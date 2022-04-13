@@ -38,7 +38,7 @@ class Colors:
 class App:
   def __init__(self, tracker, dataset, predictor):
     self._running = True
-    self._speed = 55 * 2
+    self._speed = 55 * 2 * 2
     self._pos = (25, 25)
     self._goal = self._pos
     self._lastTracked = None
@@ -103,7 +103,7 @@ class App:
         self._lastPrediction = prediction
         self._lastTracked = None
         
-        diff = np.subtract(prediction[0], prediction[1]['debugGoal'])
+        diff = np.subtract(prediction[0][-1], prediction[1]['debugGoal'])
         self._errorHistory.append(
           np.sqrt(np.square(diff).sum())
         )
@@ -144,13 +144,17 @@ class App:
       )
 
     if not(self._lastPrediction is None):
-      pos, data, info = self._lastPrediction
-      
+      positions, data, info = self._lastPrediction
       wh = np.array(self._display_surf.get_size())
-      pos = pos * wh
-      self._drawText(str(pos), (5, 5), Colors.BLACK)
-      self._drawObject(tuple(int(x) for x in pos), R=3, C=Colors.PURPLE)
-      self._drawText(str(info), (5, 95), Colors.BLACK)
+      positions = np.array(positions) * wh[None]
+      positions = positions.astype(np.int32)
+      for prevP, nextP in zip(positions[:-1], positions[1:]):
+        pygame.draw.line(window, Colors.WHITE, prevP, nextP, 2)
+        self._drawObject(tuple(nextP), R=3, C=Colors.PURPLE)
+        continue
+      self._drawObject(tuple(positions[-1]), R=5, C=Colors.RED)
+      self._drawText(str(positions), (5, 5), Colors.BLACK)
+      self._drawText(str(info), (int(self._pos[0]) - 95, int(self._pos[1]) + 15), Colors.BLACK)
       pass
     pygame.display.flip()
     return
