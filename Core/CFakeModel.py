@@ -4,22 +4,26 @@ import time
 
 class CFakeModel:
   def __init__(self):
-    self.useAR = not False
+    self.useAR = False
     if self.useAR:
       self._model = model = networks.ARModel()
+      self._ARDepth = 5
+      self._trainStepF = self._trainARStep(steps=self._ARDepth)
     else:
       self._model = model = networks.simpleModel()
-      
+      self._trainStepF = self._trainSimpleStep
+
     model.compile(
       optimizer=tf.keras.optimizers.Adam(1e-4),
-      loss='mse'
+      loss=None
     )
     self._epoch = 0
     return
 
   @tf.function
   def _inferAR(self, data, training, steps):
-    positions = tf.random.uniform(shape=(tf.shape(data[0])[0], 2))
+    # positions = tf.random.uniform(shape=(tf.shape(data[0])[0], 2))
+    positions = tf.ones(shape=(tf.shape(data[0])[0], 2), dtype=tf.float32) * 0.5
     history = []
     for _ in range(steps + 1):
       positions = self._model([*data, positions], training=training)
@@ -27,28 +31,34 @@ class CFakeModel:
       continue
     return history
 
-  @tf.function
-  def _trainAR(self, data, steps):
-    x, (y, ) = data
-    with tf.GradientTape() as tape:
+  def _trainARStep(self, steps):
+    def f(x, y):
       pred = self._inferAR(x, training=True, steps=steps)
       loss = 0.0
       for coords in pred:
         loss = loss + tf.losses.mse(y, coords)
+      return loss
+    return f
+
+  def _trainSimpleStep(self, x, y):
+    pred = self._model(x, training=True)
+    loss = tf.losses.mse(y, pred)
+    return loss
+
+  @tf.function
+  def _trainStep(self, data):
+    x, (y, ) = data
+    with tf.GradientTape() as tape:
+      loss = tf.reduce_mean(self._trainStepF(x, y))
 
     model = self._model
     grads = tape.gradient(loss, model.trainable_weights)
     model.optimizer.apply_gradients(zip(grads, model.trainable_weights))
-    return tf.reduce_mean(loss)
+    return loss
 
   def fit(self, data):
     t = time.time()
-    if self.useAR:
-      loss = self._trainAR(data, steps=5).numpy()
-    else:
-      x, y = data
-      # TODO: Write custom training step (it's faster)
-      loss = self._model.fit(x, y, batch_size=len(y), verbose=2).history['loss'][0]
+    loss = self._trainStep(data).numpy()
 
     self._epoch += 1
     t = time.time() - t
@@ -56,7 +66,7 @@ class CFakeModel:
   
   def __call__(self, data):
     if self.useAR:
-      res = self._inferAR(data, training=False, steps=5)
+      res = self._inferAR(data, training=False, steps=self._ARDepth)
       return [x.numpy()[0] for x in res]
     else:
       return self._model(data, training=False).numpy()

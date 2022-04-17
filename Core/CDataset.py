@@ -41,7 +41,7 @@ class CDataset:
 
     if len(samples) < N: return None
     return(
-      Utils.samples2inputs([x for x, _ in samples]), 
+      Utils.samples2inputs([x for x, _ in samples], dropout=0.3), 
       ( np.array([x for _, x in samples], np.float32), )
     )
     

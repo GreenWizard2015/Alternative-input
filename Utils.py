@@ -184,29 +184,34 @@ def decodeLandmarks(landmarks, HW, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
     continue
   return points
 
-def tracked2sample(data, dropout=0.0):
+def tracked2sample(data):
   points = np.full((468, 2), fill_value=-1, dtype=np.float32)
   for idx, (x, y) in data['face points'].items():
     points[idx, 0] = x
     points[idx, 1] = y
     continue
-  
-  if 0 < dropout:
-    index = np.array(list(data['face points'].keys()))
-    np.random.shuffle(index)
-    index = index[:random.randint(0, int(len(index) * (1 - dropout))) + 1]
-    if 0 < len(index):
-      points[index] = -1
-  
+    
   return {
     'points': points,
     'left eye': cv2.cvtColor(data['left eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
     'right eye': cv2.cvtColor(data['right eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
   }
 
-def samples2inputs(samples):
+def samples2inputs(samples, dropout=0.0):
+  processPoints = lambda x: x
+  if 0 < dropout:
+    def F(x):
+      x = x.copy()
+      index = np.where(np.all(-1 < x, axis=-1))[0]
+      np.random.shuffle(index)
+      index = index[:random.randint(0, int(len(index) * dropout)) + 1]
+      if 0 < len(index):
+        x[index] = -1
+      return x
+    processPoints = F
+    
   return (
-    np.array([x['points'] for x in samples], np.float32) / 255.0,
+    np.array([processPoints(x['points']) for x in samples], np.float32),
     np.array([x['left eye'] for x in samples], np.float32) / 255.0,
     np.array([x['right eye'] for x in samples], np.float32) / 255.0,
   )

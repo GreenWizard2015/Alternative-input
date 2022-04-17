@@ -42,8 +42,8 @@ def simpleModel(pointsN=468, eyeSize=32):
   eyeR = L.Input((eyeSize, eyeSize, 1))
   
   encoder = eyeEncoder(eyeL.shape[1:])
-  encodedL = encoder(eyeL)
-  encodedR = encoder(eyeR)
+  encodedL = encoder(L.Dropout(0.1)(eyeL))
+  encodedR = encoder(L.Dropout(0.1)(eyeR))
   
   pts = L.Flatten()(points)
   encodedP = sMLP(shape=pts.shape[1:], sizes=[256, 128])(pts)

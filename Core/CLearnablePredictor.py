@@ -50,7 +50,7 @@ class CLearnablePredictor:
       
     if data is None: return
     
-    sample = Utils.tracked2sample(data['tracked'], dropout=0.25)
+    sample = Utils.tracked2sample(data['tracked'])
     res = self._model(Utils.samples2inputs([sample]))
     with self._lock:
       self._inferResults = (res, data, {'samples': len(self._dataset), **trainInfo})

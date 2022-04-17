@@ -7,6 +7,7 @@ from Core.CEyeTracker import CEyeTracker
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
+import cv2
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -14,6 +15,7 @@ def normalized(a, axis=-1, order=2):
   return a / np.expand_dims(l2, axis)
 
 def cv2ImageToSurface(cv2Image):
+    cv2Image = cv2.cvtColor(cv2Image, cv2.COLOR_BGR2GRAY).astype(np.uint8)
     if cv2Image.dtype.name == 'uint16':
         cv2Image = (cv2Image / 256).astype('uint8')
     size = cv2Image.shape[1::-1]
@@ -38,6 +40,7 @@ class Colors:
 class App:
   def __init__(self, tracker, dataset, predictor):
     self._running = True
+    self._paused = False
     self._speed = 55 * 2 * 2
     self._pos = (25, 25)
     self._goal = self._pos
@@ -78,8 +81,12 @@ class App:
         self._running = False
         return
       
-      if G.K_SPACE== event.key:
+      if G.K_SPACE == event.key:
         self._running = False
+        return
+      
+      if G.K_p == event.key:
+        self._paused = not self._paused
         return
     return
    
@@ -87,9 +94,11 @@ class App:
     wh = np.array(self._display_surf.get_size(), np.float32)
     tracked = self._tracker.track()
     if not(tracked is None):
-#       self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
-#       self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
-      self._dataset.store(tracked, np.array(self._pos) / wh)
+      # self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
+      # self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
+      if  not self._paused:
+        self._dataset.store(tracked, np.array(self._pos) / wh)
+      
       self._lastTracked = {
         'tracked': tracked, 
         'time': pygame.time.get_ticks(),
@@ -121,6 +130,10 @@ class App:
   def on_render(self):
     window = self._display_surf
     window.fill(Colors.SILVER)
+    
+    if self._paused:
+      self._drawText('Paused', (55, 55), Colors.RED)
+
     self._drawObject(tuple(int(x) for x in self._pos))
     
     self._drawText(
