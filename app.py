@@ -8,6 +8,7 @@ from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
 import cv2
+import os
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -97,7 +98,7 @@ class App:
       # self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
       # self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
       if  not self._paused:
-        self._dataset.store(tracked, np.array(self._pos) / wh)
+        self._dataset.store(tracked, np.array(self._pos) / wh, pygame.time.get_ticks())
       
       self._lastTracked = {
         'tracked': tracked, 
@@ -215,7 +216,8 @@ class App:
     return
   
 def main():
-  with CThreadedEyeTracker() as tracker, CDataset() as dataset:
+  folder = os.path.dirname(__file__)
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset')) as dataset:
     with CLearnablePredictor(dataset) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()
