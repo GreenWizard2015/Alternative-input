@@ -69,7 +69,7 @@ class CDataset:
         for k, v in sample.items():
           data[k].append(v)
       continue
-    data = {k: np.array(v, np.float32) for k, v in data.items()}
+    data = {k: np.array(v) for k, v in data.items()}
 
     np.savez(self._storeTo(), **data)
     self._storedSamples.clear() 

@@ -23,6 +23,7 @@ def eyeEncoder(shape):
   eye = L.Input(shape)
   
   res = eye
+  # TODO: Enrich input by alternative repr.
   for sz in [8, 16, 32, 32]:
     res = L.Conv2D(sz, 3, strides=2, padding='same', activation='relu')(res)
     for _ in range(3):
