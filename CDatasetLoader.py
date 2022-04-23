@@ -45,15 +45,25 @@ class CDatasetLoader(tf.keras.utils.Sequence):
 if __name__ == '__main__':
   import cv2
   folder = os.path.dirname(__file__)
-  ds = CDatasetLoader(os.path.join(folder, 'Dataset'), batch_size=1)
+  ds = CDatasetLoader(os.path.join(folder, 'Dataset'), batch_size=1, pointsDropout=0.0)
+  print(len(ds))
   batchX, batchY = ds[0]
-  print(batchX)
-  print(batchY[0].shape)
+  print(batchX[0].shape)
   cv2.imshow('L', cv2.resize(batchX[1][0], (256, 256)))
   
-  img = batchX[2][0]*255
-#   img = cv2.convertScaleAbs(img, alpha=2, beta=0.0)
-  img = cv2.Canny(img.astype(np.uint8), 100,200)
-  cv2.imshow('R', cv2.resize(img, (256, 256)))
-  cv2.waitKey()
+  import networks
+#   transform = networks.EyeEnricher()
+#   images = transform([batchX[2]]).numpy()
+#   for i in range(images.shape[-1]):
+#     img = images[0, ..., i, None]
+#     cv2.imshow('R%d' % i, cv2.resize(img, (256, 256)))
+#     continue
+#   cv2.waitKey()
+  x = batchX[0]
+  encoded = networks.PointsEnricher(x.shape[1:])([x]).numpy()
+  np.set_printoptions(precision=2, threshold=77777777, linewidth=545556)
+  print(encoded[0])
+  import matplotlib.pyplot as plt
+  plt.hist(encoded.ravel())
+  plt.show()
   pass
