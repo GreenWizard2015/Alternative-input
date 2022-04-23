@@ -42,8 +42,9 @@ class CFakeModel:
 
   def _trainSimpleStep(self, x, y):
     pred = self._model(x, training=True)
-    loss = tf.losses.mse(y, pred)
-    return loss
+    # lossA = tf.losses.mse(y[:, None], pred['raw coords'])
+    # lossB = tf.losses.mse(y, pred['coords'])
+    return tf.losses.mse(y, pred['coords'])
 
   @tf.function
   def _trainStep(self, data):
@@ -69,4 +70,9 @@ class CFakeModel:
       res = self._inferAR(data, training=False, steps=self._ARDepth)
       return [x.numpy()[0] for x in res]
     else:
-      return self._model(data, training=False).numpy()
+      return self._model(data, training=False)['coords'].numpy()
+    
+  def debug(self, data):
+    res = self._model(data, training=False)
+    print(res['raw coords'].numpy())
+    print(res['coords'].numpy())

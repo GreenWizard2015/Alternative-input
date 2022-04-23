@@ -92,7 +92,17 @@ def PointsEnricher(shape):
     inputs=[points],
     outputs=[res]
   )
+
+def _decodeCoords(coords):
+  B = tf.shape(coords)[0]
+  N = tf.shape(coords)[1] // 2
   
+  # coefs = tf.exp(tf.cast(tf.range(N), tf.float32))
+  coefs = tf.pow(2., tf.cast(tf.range(N), tf.float32))
+  coords = tf.reshape(coords, (B, 2, N))
+  coords = coords / coefs
+  return tf.transpose(coords, (0, 2, 1)) # (B, N, 2)
+
 def pointsEncoder(pointsN):
   points = L.Input((pointsN, 2))
   
@@ -125,14 +135,18 @@ def simpleModel(pointsN=468, eyeSize=32):
     L.Flatten()(encodedR),
   ])
   
-  coords = L.Dense(2, activation='linear')(
+  coords = L.Dense(2 * 16, activation='relu')(
     sMLP(shape=combined.shape[1:], sizes=[256, 128, 64, 32])(
       combined
     )
   )
+  coords = L.Lambda(_decodeCoords)(coords)
   return tf.keras.Model(
     inputs=[points, eyeL, eyeR],
-    outputs=[coords]
+    outputs={
+      'coords': L.Lambda(lambda x: tf.reduce_sum(x, axis=1))(coords),
+      'raw coords': coords,
+    }
   )
 
 def ARModel(pointsN=468, eyeSize=32):
