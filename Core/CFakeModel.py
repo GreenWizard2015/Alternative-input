@@ -74,11 +74,6 @@ class CFakeModel:
       loss = 0.0
       latent = self._encoder(x, training=True)['latent']
       ############
-      rng = tf.linspace(0.0, 1.0, 20)
-      xi, yi = tf.meshgrid(rng, rng)
-      coords = tf.squeeze(tf.stack([tf.reshape(xi, (-1,1)), tf.reshape(yi, (-1,1))], axis=-1))
-      SAMPLED_POINTS = tf.shape(coords)[0]
-      
       B = tf.shape(latent)[0]
       targetV = self._decoder([latent, y], training=True)['valueAt']
       targetV = tf.repeat(targetV, repeats=SAMPLED_POINTS, axis=0)
