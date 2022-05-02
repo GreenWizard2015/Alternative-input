@@ -3,13 +3,13 @@ from .CFakeModel import CFakeModel
 import Utils
 
 class CLearnablePredictor:
-  def __init__(self, dataset):
+  def __init__(self, dataset, model=None):
     self._dataset = dataset
     self._lock = threading.Lock()
     self._done = threading.Event()
     self._inferData = None
     self._inferResults = None
-    self._model = CFakeModel()
+    self._model = CFakeModel() if model is None else model
     return
 
   def __enter__(self):
@@ -37,10 +37,11 @@ class CLearnablePredictor:
     return
   
   def _train(self):
-    data = self._dataset.sample()
     info = {}
-    if data:
-      info = self._model.fit(data)
+    if self._model.trainable:
+      data = self._dataset.sample()
+      if data:
+        info = self._model.fit(data)
     return info
   
   def _infer(self, trainInfo):
@@ -51,7 +52,9 @@ class CLearnablePredictor:
     if data is None: return
     
     sample = Utils.tracked2sample(data['tracked'])
-    res = self._model(Utils.samples2inputs([sample]))
+    res = self._model(Utils.samples2inputs([sample]), startPos=data['pos'][None])
+#     res = self._model(Utils.samples2inputs([sample] * 32, dropout=0.1)) # (32, 2)
+#     res = res.mean(0)[None]
     with self._lock:
       self._inferResults = (res, data, {'samples': len(self._dataset), **trainInfo})
     return

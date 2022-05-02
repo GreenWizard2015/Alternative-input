@@ -9,6 +9,7 @@ from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
 import cv2
 import os
+from Core.CFakeModel import CFakeModel
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -27,7 +28,7 @@ def cv2ImageToSurface(cv2Image):
         format = 'RGBA' if cv2Image.shape[2] == 4 else 'RGB'
         cv2Image[:, :, [0, 2]] = cv2Image[:, :, [2, 0]]
     surface = pygame.image.frombuffer(cv2Image.flatten(), size, format)
-    return surface.convert_alpha() if format == 'RGBA' else surface.convert()  
+    return surface.convert_alpha() if format == 'RGBA' else surface.convert()
   
 class Colors:
   BLACK = (0, 0, 0)
@@ -41,12 +42,13 @@ class Colors:
 class App:
   def __init__(self, tracker, dataset, predictor):
     self._running = True
-    self._paused = False
+    self._paused = True # False
     self._speed = 55 * 2 * 2
     self._pos = (25, 25)
     self._goal = self._pos
     self._lastTracked = None
     self._lastPrediction = None
+    self._smoothedPrediction = (0, 0)
     self._errorHistory = [0.0]
     
     self._tracker = tracker
@@ -103,7 +105,8 @@ class App:
       self._lastTracked = {
         'tracked': tracked, 
         'time': pygame.time.get_ticks(),
-        'debugGoal': np.array(self._pos) / wh
+        'debugGoal': np.array(self._pos) / wh,
+        'pos': np.array(self._smoothedPrediction, np.float32)
       }
       pass
     #####################
@@ -113,12 +116,18 @@ class App:
         self._lastPrediction = prediction
         self._lastTracked = None
         
-        diff = np.subtract(prediction[0][-1], prediction[1]['debugGoal'])
+        predPos = prediction[0]['coords'][-1]
+        diff = np.subtract(predPos, prediction[1]['debugGoal'])
         self._errorHistory.append(
           np.sqrt(np.square(diff).sum())
         )
         self._errorHistory = self._errorHistory[-25:]
       pass
+    
+    if self._lastPrediction:
+      factor = 0.95
+      predPos = self._lastPrediction[0]['coords'][-1]
+      self._smoothedPrediction = np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor)
     #####################
     vec = normalized(np.subtract(self._goal, self._pos))[0]
     self._pos = np.add(self._pos, vec * self._speed * deltaT)
@@ -158,7 +167,8 @@ class App:
       )
 
     if not(self._lastPrediction is None):
-      positions, data, info = self._lastPrediction
+      predicted, data, info = self._lastPrediction
+      positions = predicted['coords']
       wh = np.array(self._display_surf.get_size())
       positions = np.array(positions) * wh[None]
       positions = positions.astype(np.int32)
@@ -169,6 +179,22 @@ class App:
       self._drawObject(tuple(positions[-1]), R=5, C=Colors.RED)
       self._drawText(str(positions), (5, 5), Colors.BLACK)
       self._drawText(str(info), (int(self._pos[0]) - 95, int(self._pos[1]) + 15), Colors.BLACK)
+      
+      sp = np.multiply(self._smoothedPrediction, wh)
+      self._drawObject(tuple(int(x) for x in sp), R=5, C=Colors.BLACK)
+      
+      if 'nerf' in predicted:
+        nerf = predicted['nerf']
+        
+        rng = np.linspace(0.0, 1.0, nerf.shape[0])
+        for yp, ydata in zip(rng, nerf):
+          for xp, value in zip(rng, ydata):
+            pos = np.multiply((xp, yp), wh).astype(np.int32)
+            pygame.draw.circle(self._display_surf, (int(value * 255), 0, 0), tuple(pos), 3, 0)
+#             self._drawText('%.3f' % value, tuple(pos), Colors.GREEN)
+            continue
+          continue
+        pass
       pass
     pygame.display.flip()
     return
@@ -217,8 +243,11 @@ class App:
   
 def main():
   folder = os.path.dirname(__file__)
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset')) as dataset:
-    with CLearnablePredictor(dataset) as predictor:
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'DatasetX')) as dataset:
+#     model = CFakeModel('autoregressive', depth=15, weights=os.path.join(folder, 'autoregressive.h5'), trainable=True)
+#     model = CFakeModel('simple', weights=os.path.join(folder, 'simple.h5'), trainable=True)
+    model = CFakeModel('NerfLike', depth=5)
+    with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()
   pass

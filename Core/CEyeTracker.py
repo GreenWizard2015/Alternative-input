@@ -52,6 +52,8 @@ class CEyeTracker:
       XY[:, 1].min()-5:XY[:, 1].max()+5,
       XY[:, 0].min()-5:XY[:, 0].max()+5,
     ]
+    if np.min(crop.shape[:2]) < 8:
+      return np.zeros((*sz, image.shape[-1]), image.dtype)
     return cv2.resize(crop, sz)
   
   def _processFace(self, pose, image):
