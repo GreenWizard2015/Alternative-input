@@ -1,7 +1,9 @@
 import networks
 import tensorflow as tf
 import time
+import numpy as np
 
+# TODO: Fix nerf saving/loading
 class CFakeModel:
   def __init__(self, model='simple', **kwargs):
     self._modelID = model
@@ -33,6 +35,9 @@ class CFakeModel:
         optimizer=tf.keras.optimizers.Adam(1e-4),
         loss=None
       )
+      if 'weights' in kwargs:
+        self._encoder.load_weights('encoder.h5')
+        self._decoder.load_weights('decoder.h5')
       return
     
     if 'weights' in kwargs:
@@ -47,19 +52,24 @@ class CFakeModel:
     return
 
   @tf.function
-  def _inferAR(self, data, training, steps, startPos=0.5):
-    # positions = tf.random.uniform(shape=(tf.shape(data[0])[0], 2))
-    positions = tf.ones(shape=(tf.shape(data[0])[0], 2), dtype=tf.float32) * startPos
+  def _inferAR(self, data, training, steps, positions=None, F=lambda x: x):
+    if positions is None:
+      positions = tf.random.normal(shape=(tf.shape(data[0])[0], 2), mean=0.5, stddev=0.1)
+      pass
+    
     history = []
     for _ in range(steps + 1):
-      positions = self._model([*data, positions], training=training)
+      positions = self._model([*data, F(positions)], training=training)
       history.append(positions)
       continue
     return history
 
   def _trainARStep(self, steps):
     def f(x, y):
-      pred = self._inferAR(x, training=True, steps=steps)
+      pred = self._inferAR(
+        x, training=True, steps=steps,
+        F=tf.stop_gradient
+      )
       loss = 0.0
       for coords in pred:
         loss = loss + tf.losses.mse(y, coords)
@@ -71,41 +81,33 @@ class CFakeModel:
     x, (y, ) = data
     with tf.GradientTape(persistent=True) as tape:
       SAMPLED_POINTS = 32 * 4
-      loss = 0.0
+      targetY = tf.repeat(y, repeats=SAMPLED_POINTS, axis=0)
       latent = self._encoder(x, training=True)['latent']
       ############
       B = tf.shape(latent)[0]
-      targetV = self._decoder([latent, y], training=True)['valueAt']
-      targetV = tf.repeat(targetV, repeats=SAMPLED_POINTS, axis=0)
+      targetE = self._decoder([latent, y], training=True)['valueAt']
+      rays = tf.linalg.l2_normalize(tf.random.normal((B * SAMPLED_POINTS, 2)), axis=-1)
       
       latentForPoints = tf.repeat(latent, repeats=SAMPLED_POINTS, axis=0)
-      targetY = tf.repeat(y, repeats=SAMPLED_POINTS, axis=0)
-      pointsA = tf.random.uniform((B * SAMPLED_POINTS, 2), 0.0, 1.0)
-
-      for _ in tf.range(3):
-        pointsA = tf.clip_by_value(pointsA, clip_value_min=0.0, clip_value_max=1.0)
-        
-        noiseVec = tf.linalg.l2_normalize(tf.random.normal(tf.shape(pointsA)), axis=-1)
-        noiseL = tf.random.uniform((B * SAMPLED_POINTS, 1), 1e-4, 1e-2)
-        pointsB = pointsA + noiseVec * noiseL
-        
-        sampledA = self._decoder([latentForPoints, pointsA], training=True)['valueAt']
-        sampledB = self._decoder([latentForPoints, pointsB], training=True)['valueAt']
-
-        # move from B, so if (sampledA - sampledB) == 0 then move to (random) B
-        # k = (sampledA - sampledB) / noiseL
-        # D = tf.math.divide_no_nan(sampledB, k)
-        D = tf.math.divide_no_nan(sampledB * noiseL, sampledA - sampledB)
-#         tf.print(D[0], sampledA[0], sampledB[0])
-        
-        DNoised = 1.0 # tf.random.normal(tf.shape(D), mean=1.0, stddev=0.1)
-        pointsA += (pointsB + D * DNoised * noiseVec) - pointsA
-
-        loss += tf.reduce_mean(tf.losses.mse(targetY, pointsB + D * noiseVec))
-        loss += tf.reduce_mean(tf.math.softplus(targetV - sampledA)) * 0.1
-        loss += tf.reduce_mean(tf.math.softplus(targetV - sampledB)) * 0.1
+      steps = 15
+      EHistory = tf.TensorArray(tf.float32, 1 + steps, dynamic_size=False, clear_after_read=False)
+      EHistory = EHistory.write(0, tf.reduce_mean(targetE))
+      LSteps = tf.range(1 + steps, dtype=tf.float32) * 1.1 / (0.0 + steps)
+      LSteps = tf.square(LSteps)
+      for i in tf.range(steps):
+        raysL = tf.random.uniform((B * SAMPLED_POINTS, 2), LSteps[i], LSteps[i + 1])
+        points = targetY + rays * raysL
+        E = self._decoder([latentForPoints, points], training=True)['valueAt']
+        EHistory = EHistory.write(1 + i, tf.reduce_mean(E))
         continue
-      loss = tf.reduce_mean(loss) + tf.reduce_mean(targetV) #* 1e-3 # minimum must be at target
+      ######################
+      E = EHistory.stack()
+      N = tf.shape(E)[-1]
+      mask = tf.range(N)
+      mask = tf.cast(tf.reshape(mask, (N, 1)) < tf.repeat(mask[None], N, axis=0), tf.float32)
+      EDiff = tf.reshape(E, (N, 1)) - tf.repeat(E[None], N, axis=0)
+      EMatrix = tf.math.softplus(EDiff) * mask
+      loss = tf.reduce_sum(EMatrix) #/ tf.reduce_sum(mask)
 
     for model in [self._encoder, self._decoder]:
       grads = tape.gradient(loss, model.trainable_weights)
@@ -131,6 +133,7 @@ class CFakeModel:
   def fit(self, data):
     t = time.time()
     loss = 0.0
+    extra = {}
     if self.trainable:
       if self.useNL:
         loss = self._trainNerfStep(data).numpy()
@@ -138,13 +141,13 @@ class CFakeModel:
         loss = self._trainStep(data).numpy()
       self._epoch += 1
     t = time.time() - t
-    return {'loss': loss, 'epoch': self._epoch, 'time': int(t * 1000)}
+    return {'loss': loss, 'epoch': self._epoch, 'time': int(t * 1000), **extra}
   
   def __call__(self, data, startPos=None):
     if self.useAR:
-      res = self._inferAR(data, training=False, steps=self._ARDepth, startPos=startPos)
+      res = self._inferAR(data, training=False, steps=self._ARDepth, positions=startPos)
       return {
-        'coords': [x.numpy()[0] for x in res] 
+        'coords': [x.numpy()[0] for x in res]
       }
     
     if 'simple' == self._modelID:
@@ -154,9 +157,11 @@ class CFakeModel:
     
     if self.useNL:
       nerf = self.sampleNerf(data).numpy()[0]
+      # nerf = np.log(1.0 + nerf)
       r = nerf.max() - nerf.min()
       if r <= 0.0: r = 1.0
       nerf = (nerf - nerf.min()) / r
+      
       return {
         'coords': [[0.5, 0.5]],
         'nerf': nerf 
@@ -170,11 +175,15 @@ class CFakeModel:
     return
     
   def save(self, filename):
+    if self.useNL:
+      self._encoder.save_weights('encoder.h5')
+      self._decoder.save_weights('decoder.h5')
+      return
     self._model.save_weights(filename)
     return
   
   @tf.function
-  def sampleNerf(self, data, NPoints=25, batch_size=128, training=False):
+  def sampleNerf(self, data, NPoints=128, batch_size=1024, training=False):
     rng = tf.linspace(0.0, 1.0, NPoints)
     x, y = tf.meshgrid(rng, rng)
     coords = tf.squeeze(tf.stack([tf.reshape(x, (-1,1)), tf.reshape(y, (-1,1))], axis=-1))

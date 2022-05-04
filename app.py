@@ -17,7 +17,6 @@ def normalized(a, axis=-1, order=2):
   return a / np.expand_dims(l2, axis)
 
 def cv2ImageToSurface(cv2Image):
-    cv2Image = cv2.cvtColor(cv2Image, cv2.COLOR_BGR2GRAY).astype(np.uint8)
     if cv2Image.dtype.name == 'uint16':
         cv2Image = (cv2Image / 256).astype('uint8')
     size = cv2Image.shape[1::-1]
@@ -50,6 +49,7 @@ class App:
     self._lastPrediction = None
     self._smoothedPrediction = (0, 0)
     self._errorHistory = [0.0]
+    self._showNerf = False
     
     self._tracker = tracker
     self._eyes = [None, None]
@@ -91,6 +91,10 @@ class App:
       if G.K_p == event.key:
         self._paused = not self._paused
         return
+      
+      if G.K_h == event.key:
+        self._showNerf = not self._showNerf
+        return
     return
    
   def on_tick(self, deltaT):
@@ -122,12 +126,23 @@ class App:
           np.sqrt(np.square(diff).sum())
         )
         self._errorHistory = self._errorHistory[-25:]
+        if 'nerf' in prediction[0]:
+          nerf = prediction[0]['nerf']
+          self.nerf = cv2ImageToSurface(
+            cv2.cvtColor(127 + (nerf * 255.0 / 2.), cv2.COLOR_GRAY2BGR).astype(np.uint8)
+          )
+          self.nerf = pygame.transform.scale(self.nerf, self._display_surf.get_size())
+          
       pass
     
     if self._lastPrediction:
       factor = 0.95
       predPos = self._lastPrediction[0]['coords'][-1]
-      self._smoothedPrediction = np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor)
+      self._smoothedPrediction = np.clip(
+        np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
+        0.0, 1.0
+      )
+      
     #####################
     vec = normalized(np.subtract(self._goal, self._pos))[0]
     self._pos = np.add(self._pos, vec * self._speed * deltaT)
@@ -139,7 +154,18 @@ class App:
     
   def on_render(self):
     window = self._display_surf
+    wh = np.array(window.get_size())
     window.fill(Colors.SILVER)
+    
+    if not(self._lastPrediction is None):
+      predicted, data, info = self._lastPrediction
+      if 'nerf' in predicted:
+        if self._showNerf:
+          x = self.nerf#pygame.transform.scale(self.nerf, wh)
+          window.blit(x, x.get_rect(topleft=(0, 0)))
+        else:
+          self._drawText('Nerf is hidden', (55, 75), Colors.RED)
+        pass
     
     if self._paused:
       self._drawText('Paused', (55, 55), Colors.RED)
@@ -169,7 +195,7 @@ class App:
     if not(self._lastPrediction is None):
       predicted, data, info = self._lastPrediction
       positions = predicted['coords']
-      wh = np.array(self._display_surf.get_size())
+      
       positions = np.array(positions) * wh[None]
       positions = positions.astype(np.int32)
       for prevP, nextP in zip(positions[:-1], positions[1:]):
@@ -182,19 +208,15 @@ class App:
       
       sp = np.multiply(self._smoothedPrediction, wh)
       self._drawObject(tuple(int(x) for x in sp), R=5, C=Colors.BLACK)
-      
-      if 'nerf' in predicted:
-        nerf = predicted['nerf']
         
-        rng = np.linspace(0.0, 1.0, nerf.shape[0])
-        for yp, ydata in zip(rng, nerf):
-          for xp, value in zip(rng, ydata):
-            pos = np.multiply((xp, yp), wh).astype(np.int32)
-            pygame.draw.circle(self._display_surf, (int(value * 255), 0, 0), tuple(pos), 3, 0)
-#             self._drawText('%.3f' % value, tuple(pos), Colors.GREEN)
-            continue
-          continue
-        pass
+#         rng = np.linspace(0.0, 1.0, nerf.shape[0])
+#         for yp, ydata in zip(rng, nerf):
+#           for xp, value in zip(rng, ydata):
+#             pos = np.multiply((xp, yp), wh).astype(np.int32)
+#             pygame.draw.circle(self._display_surf, (int(value * 255), 0, 0), tuple(pos), 3, 0)
+# #             self._drawText('%.3f' % value, tuple(pos), Colors.GREEN)
+#             continue
+#           continue
       pass
     pygame.display.flip()
     return
@@ -243,10 +265,10 @@ class App:
   
 def main():
   folder = os.path.dirname(__file__)
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'DatasetX')) as dataset:
-#     model = CFakeModel('autoregressive', depth=15, weights=os.path.join(folder, 'autoregressive.h5'), trainable=True)
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset')) as dataset:
+#     model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=True)
 #     model = CFakeModel('simple', weights=os.path.join(folder, 'simple.h5'), trainable=True)
-    model = CFakeModel('NerfLike', depth=5)
+    model = CFakeModel('NerfLike', weights='load hack')
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()
