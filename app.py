@@ -50,7 +50,6 @@ class App:
     self._lastPrediction = None
     self._smoothedPrediction = (0, 0)
     self._errorHistory = [0.0]
-    self._showNerf = False
     self._showSamplesDistribution = False
     self._showPredictions = True
     
@@ -95,10 +94,6 @@ class App:
         self._paused = not self._paused
         return
       
-      if G.K_h == event.key:
-        self._showNerf = not self._showNerf
-        return
-      
       if G.K_d == event.key:
         self._showSamplesDistribution = not self._showSamplesDistribution
         return
@@ -137,13 +132,6 @@ class App:
           np.sqrt(np.square(diff).sum())
         )
         self._errorHistory = self._errorHistory[-25:]
-        if 'nerf' in prediction[0]:
-          nerf = prediction[0]['nerf']
-          self.nerf = cv2ImageToSurface(
-            cv2.cvtColor(127 + (nerf * 255.0 / 2.), cv2.COLOR_GRAY2BGR).astype(np.uint8)
-          )
-          self.nerf = pygame.transform.scale(self.nerf, self._display_surf.get_size())
-          
       pass
     
     if self._lastPrediction:
@@ -167,17 +155,7 @@ class App:
     window = self._display_surf
     wh = np.array(window.get_size())
     window.fill(Colors.SILVER)
-    
-    if not(self._lastPrediction is None):
-      predicted, data, info = self._lastPrediction
-      if 'nerf' in predicted:
-        if self._showNerf:
-          x = self.nerf#pygame.transform.scale(self.nerf, wh)
-          window.blit(x, x.get_rect(topleft=(0, 0)))
-        else:
-          self._drawText('Nerf is hidden', (55, 75), Colors.RED)
-        pass
-    
+
     if self._showSamplesDistribution:
       window.blit(self._distrMap, self._distrMap.get_rect(topleft=(0, 0)))
       pass
@@ -287,7 +265,6 @@ def main():
     model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=not True)
 #     model = CFakeModel('autoregressive', depth=5)
 #     model = CFakeModel('simple', weights=os.path.join(folder, 'simple.h5'), trainable=True)
-#     model = CFakeModel('NerfLike', weights='load hack')
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()

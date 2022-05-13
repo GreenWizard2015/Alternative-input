@@ -111,7 +111,7 @@ def eyeEncoder(shape):
     for _ in range(3):
       res = L.Conv2D(sz, 3, padding='same', activation='relu')(res)
     continue
-  
+
   return tf.keras.Model(
     inputs=[eye],
     outputs=[res]
@@ -206,64 +206,7 @@ def ARModel(pointsN=468, eyeSize=32):
     inputs=[points, eyeL, eyeR, position],
     outputs=[position + coords]
   )
-###########
-def NerfLikeEncoder(pointsN=468, eyeSize=32, latentSize=64):
-  points = L.Input((pointsN, 2))
-  eyeL = L.Input((eyeSize, eyeSize, 1))
-  eyeR = L.Input((eyeSize, eyeSize, 1))
-  
-  encoder = eyeEncoder(eyeL.shape[1:])
-  encodedL = encoder(eyeL)
-  encodedR = encoder(eyeR)
-  
-  encodedP = pointsEncoder(pointsN=points.shape[1])(points)
-
-  combined = L.Concatenate(axis=-1)([
-    encodedP,
-    L.Flatten()(encodedL),
-    L.Flatten()(encodedR),
-  ])
-  
-  latent = L.Dense(latentSize, activation='relu')(
-    sMLP(shape=combined.shape[1:], sizes=[256, 128, 128, 64])(
-      combined
-    )
-  )
-  return tf.keras.Model(
-    inputs=[points, eyeL, eyeR],
-    outputs={
-      'latent': latent
-    }
-  )
-
-def NerfLikeDecoder(latentSize=64):
-  point = L.Input((2,))
-  latent = latentX = L.Input((latentSize,))
- 
-  encodedP = L.Flatten()(
-    CCoordsEncodingLayer(32)( L.Reshape((1, 2))(point) )
-  )
-  initState = L.Concatenate(axis=-1)([encodedP, latent])
-
-  for blockId in range(1):
-    combined = L.Concatenate(axis=-1)([initState, latent])
-    latent = sMLP(shape=combined.shape[1:], sizes=[128]*5, activation='relu')(
-      combined
-    )
-    continue
-  
-  series = L.Dense(24, activation='relu')(
-    L.Concatenate(axis=-1)([initState, latent])
-  )
-  return tf.keras.Model(
-    inputs=[latentX, point],
-    outputs={
-      'valueAt': L.Lambda(lambda x: _decodeSeries(x[:, None], base=2.0))(series)
-    }
-  )
 
 if __name__ == '__main__':
   ARModel().summary()
-#   NerfLikeEncoder().summary()
-#   NerfLikeDecoder().summary()
   pass
