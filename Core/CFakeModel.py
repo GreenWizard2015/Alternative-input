@@ -74,10 +74,7 @@ class CFakeModel:
     loss = 0.0
     extra = {}
     if self.trainable:
-      if self.useNL:
-        loss = self._trainNerfStep(data).numpy()
-      else:
-        loss = self._trainStep(data).numpy()
+      loss = self._trainStep(data).numpy()
       self._epoch += 1
     t = time.time() - t
     return {'loss': loss, 'epoch': self._epoch, 'time': int(t * 1000), **extra}
