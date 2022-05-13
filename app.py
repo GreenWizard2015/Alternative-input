@@ -284,11 +284,10 @@ class App:
 def main():
   folder = os.path.dirname(__file__)
   with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset')) as dataset:
-#     model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=not True)
+    model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=not True)
 #     model = CFakeModel('autoregressive', depth=5)
 #     model = CFakeModel('simple', weights=os.path.join(folder, 'simple.h5'), trainable=True)
 #     model = CFakeModel('NerfLike', weights='load hack')
-    model = CFakeModel('ARDM', depth=10, weights=os.path.join(folder, 'ARDM.h5'), trainable=not True)
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()
