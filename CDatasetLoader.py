@@ -2,23 +2,14 @@ import tensorflow as tf
 import numpy as np
 import Utils
 import math
-import glob
 import os
-from collections import defaultdict
 
 class CDatasetLoader(tf.keras.utils.Sequence):
   def __init__(self, folder, batch_size, pointsDropout=0.0, eyeDropout=0.0):
     self.batch_size = batch_size
     self._pointsDropout = pointsDropout
     self._eyeDropout = eyeDropout
-    #######
-    dataset = defaultdict(list) # eat memory but ok
-    for fn in glob.iglob(os.path.join(folder, '*.npz')):
-      with np.load(fn) as data:
-        for k, v in data.items():
-          dataset[k].append(v)
-      continue
-    self._dataset = {k: np.concatenate(v, axis=0) for k, v in dataset.items()}
+    self._dataset = Utils.datasetFromFolder(folder)
     N = len(list(self._dataset.values())[0])
     self._indexes = np.arange(math.ceil(N / float(batch_size)) * batch_size) % N
     

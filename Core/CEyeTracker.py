@@ -17,7 +17,10 @@ class CEyeTracker:
     cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     cap.set(cv2.CAP_PROP_AUTO_WB, 0)
     
-    self._pose = mediapipe.solutions.holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    self._pose = mediapipe.solutions.holistic.Holistic(
+      min_detection_confidence=self._PRESENCE_THRESHOLD,
+      min_tracking_confidence=self._VISIBILITY_THRESHOLD
+    )
     return self
 
   def __exit__(self, type, value, traceback):

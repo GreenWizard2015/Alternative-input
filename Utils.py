@@ -3,6 +3,8 @@ import numpy as np
 from collections import defaultdict
 import cv2
 import random
+import os
+import glob
 
 def limitGPUMemory(memory_limit):
   import tensorflow as tf
@@ -215,3 +217,23 @@ def samples2inputs(samples, dropout=0.0):
     np.array([x['left eye'] for x in samples], np.float32) / 255.0,
     np.array([x['right eye'] for x in samples], np.float32) / 255.0,
   )
+
+def emptyInputs():
+  points = np.full((1, 468, 2), fill_value=-1, dtype=np.float32)
+  eye = np.zeros((1, 32, 32, 1), dtype=np.float32)
+  return (points, eye, eye)
+
+def dataFromFolder(folder):
+  for fn in glob.iglob(os.path.join(folder, '*.npz')):
+    with np.load(fn) as data:
+      yield data
+    continue
+  return
+
+def datasetFromFolder(folder):
+  dataset = defaultdict(list)
+  for data in dataFromFolder(folder):
+    for k, v in data.items():
+      dataset[k].append(v)
+    continue
+  return {k: np.concatenate(v, axis=0) for k, v in dataset.items()}

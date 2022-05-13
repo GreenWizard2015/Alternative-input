@@ -51,29 +51,6 @@ def createSobelsConv(sizes):
   kernels = [np.pad(k, (maxD - k.shape[0]) // 2) for k in res]
   return np.stack(kernels, axis=0)
 
-'''
-@tf.function
-def _EyeEnricher_process(srcImages):
-  contrasted = []
-  edges = []
-  gammaAdjusted = []
-  for gamma in [4.0, 1.0, 1.0 / 4.0]:
-    images = tf.image.adjust_gamma(srcImages, gamma)
-    gammaAdjusted.append(images)
-    for contrast in [4.0, 8.0, 16.0]:
-      imgs = tf.image.adjust_contrast(images, contrast)
-      contrasted.append(imgs)
-      
-      sobel = tf.image.sobel_edges(imgs)
-      edges.append(sobel[..., 0])
-      edges.append(sobel[..., 1])
-      continue
-    continue
-  
-  res = [srcImages] + gammaAdjusted + contrasted + edges
-  res = tf.concat(res, axis=-1)
-  return tf.stop_gradient(res) # prevent some issues with XLA
-'''
 @tf.function
 def _EyeEnricher_processColors(srcImages):
   contrasted = []
@@ -140,18 +117,6 @@ def eyeEncoder(shape):
     outputs=[res]
   )
 
-def PointsEnricher(shape):
-  points = L.Input(shape)
-  encodedPoints = CCoordsEncodingLayer(N=30)(points)
-  res = L.Lambda(
-    lambda x: x[0] * tf.cast(tf.reduce_all(0.0 <= x[1], axis=-1), tf.float32)[..., None]
-  )([encodedPoints, points])
-  
-  return tf.keras.Model(
-    inputs=[points],
-    outputs=[res]
-  )
-
 def _decodeSeries(x, base=2.0):
   N = tf.shape(x)[-1]
   coefs = tf.pow(base, tf.cast(tf.range(N), tf.float32))
@@ -159,10 +124,14 @@ def _decodeSeries(x, base=2.0):
 
 def pointsEncoder(pointsN):
   points = L.Input((pointsN, 2))
-
-  pts = PointsEnricher(points.shape[1:])(points)
-  pts = sMLP(shape=pts.shape[1:], sizes=[16, 8, 8, 4])(pts)
-  pts = L.Flatten()(pts)
+  
+  encodedPoints = CCoordsEncodingLayer(N=30, name='points_encoder/coords')(points)
+  encodedPoints = L.Lambda(
+    lambda x: x[0] * tf.cast(tf.reduce_all(0.0 <= x[1], axis=-1), tf.float32)[..., None]
+  )([encodedPoints, points])
+  
+  encodedPoints = sMLP(shape=encodedPoints.shape[1:], sizes=[16, 8, 8, 4])(encodedPoints)
+  pts = L.Flatten()(encodedPoints)
   res = sMLP(shape=pts.shape[1:], sizes=[256, 256, 128, 128, 96])(pts)
   
   return tf.keras.Model(
@@ -215,13 +184,16 @@ def ARModel(pointsN=468, eyeSize=32):
   encodedFace = pointsEncoder(pointsN=points.shape[1])(points)
 
   combined = L.Concatenate(axis=-1)([
-    L.Flatten()(CCoordsEncodingLayer(32)(pos)),
+    L.Flatten()(CCoordsEncodingLayer(32, name='posA')(pos)),
     encodedFace, encodedL, encodedR,
   ])
   
   latent = sMLP(shape=combined.shape[1:], sizes=[256, 128, 64, 32])(combined)
   
-  combined = L.Concatenate(axis=-1)([L.Flatten()(CCoordsEncodingLayer(32)(pos)), latent])
+  combined = L.Concatenate(axis=-1)([
+    L.Flatten()(CCoordsEncodingLayer(32, name='posB')(pos)), 
+    latent
+  ])
   coords = L.Dense(2 * 16, activation='linear')(
     sMLP(shape=combined.shape[1:], sizes=[64, 64, 64])(
       combined
@@ -281,10 +253,8 @@ def NerfLikeDecoder(latentSize=64):
     continue
   
   series = L.Dense(24, activation='relu')(
-    latent
-#     L.Concatenate(axis=-1)([initState, latent])
+    L.Concatenate(axis=-1)([initState, latent])
   )
-  
   return tf.keras.Model(
     inputs=[latentX, point],
     outputs={

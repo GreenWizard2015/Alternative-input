@@ -10,6 +10,7 @@ from Core.CLearnablePredictor import CLearnablePredictor
 import cv2
 import os
 from Core.CFakeModel import CFakeModel
+import random
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -50,6 +51,8 @@ class App:
     self._smoothedPrediction = (0, 0)
     self._errorHistory = [0.0]
     self._showNerf = False
+    self._showSamplesDistribution = False
+    self._showPredictions = True
     
     self._tracker = tracker
     self._eyes = [None, None]
@@ -94,6 +97,14 @@ class App:
       
       if G.K_h == event.key:
         self._showNerf = not self._showNerf
+        return
+      
+      if G.K_d == event.key:
+        self._showSamplesDistribution = not self._showSamplesDistribution
+        return
+      
+      if G.K_s == event.key:
+        self._showPredictions = not self._showPredictions
         return
     return
    
@@ -167,6 +178,10 @@ class App:
           self._drawText('Nerf is hidden', (55, 75), Colors.RED)
         pass
     
+    if self._showSamplesDistribution:
+      window.blit(self._distrMap, self._distrMap.get_rect(topleft=(0, 0)))
+      pass
+    
     if self._paused:
       self._drawText('Paused', (55, 55), Colors.RED)
 
@@ -192,7 +207,7 @@ class App:
         x.get_rect(topleft=window.get_rect().inflate(-10, -10 - 2*128).topleft)
       )
 
-    if not(self._lastPrediction is None):
+    if self._showPredictions and not(self._lastPrediction is None):
       predicted, data, info = self._lastPrediction
       positions = predicted['coords']
       
@@ -208,15 +223,6 @@ class App:
       
       sp = np.multiply(self._smoothedPrediction, wh)
       self._drawObject(tuple(int(x) for x in sp), R=5, C=Colors.BLACK)
-        
-#         rng = np.linspace(0.0, 1.0, nerf.shape[0])
-#         for yp, ydata in zip(rng, nerf):
-#           for xp, value in zip(rng, ydata):
-#             pos = np.multiply((xp, yp), wh).astype(np.int32)
-#             pygame.draw.circle(self._display_surf, (int(value * 255), 0, 0), tuple(pos), 3, 0)
-# #             self._drawText('%.3f' % value, tuple(pos), Colors.GREEN)
-#             continue
-#           continue
       pass
     pygame.display.flip()
     return
@@ -252,23 +258,37 @@ class App:
     return
   
   def _nextGoal(self):
+    def dist(a, b): return np.square(np.subtract(a, b)).sum()
     wh = np.array(self._display_surf.get_size())
-    while True:
-      delta = np.random.normal(size=(2,)) * self._speed * 10
-      if np.sqrt(np.square(delta).sum()) < self._speed * 3: continue
-
-      pt = np.add(self._pos, delta)
-      if np.all(0 < pt) and np.all(pt < wh):
-        self._goal = pt
-        return
+    pos = np.array(self._pos, np.float) / wh
+    distr, dMap = self._dataset.distribution()
+    ##########
+    dMap = dMap.astype(np.float32)
+    dMap /= 1 + dMap.max()
+    dMap = cv2ImageToSurface(
+      cv2.cvtColor(127 + (dMap * 255.0 / 2.), cv2.COLOR_GRAY2BGR).astype(np.uint8)
+    )
+    self._distrMap = pygame.transform.scale(dMap, self._display_surf.get_size())
+    ##########
+    distr = [(c, N, dist(pos, c)) for c, N in distr]
+    distr = [(c, N, d) for c, N, d in distr if (0.1 < d) and (d < 0.75)]
+    maxN = float(max([x[1] for x in distr]))
+    if maxN < 1: maxN = 1
+    distr = [(c, (maxN - N) / maxN) for c, N, d in distr if (0.1 < d) and (d < 0.75)]
+    random.shuffle(distr) # shuffle same values order
+    candidates = list(sorted(distr, key=lambda x: x[1]))[-16:]
+    goal, _ = random.choice(candidates)
+    self._goal = np.multiply(goal, wh)
     return
   
 def main():
   folder = os.path.dirname(__file__)
   with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset')) as dataset:
-#     model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=True)
+#     model = CFakeModel('autoregressive', depth=5, weights=os.path.join(folder, 'autoregressive.h5'), trainable=not True)
+#     model = CFakeModel('autoregressive', depth=5)
 #     model = CFakeModel('simple', weights=os.path.join(folder, 'simple.h5'), trainable=True)
-    model = CFakeModel('NerfLike', weights='load hack')
+#     model = CFakeModel('NerfLike', weights='load hack')
+    model = CFakeModel('ARDM', depth=10, weights=os.path.join(folder, 'ARDM.h5'), trainable=not True)
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()

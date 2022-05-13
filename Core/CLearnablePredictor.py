@@ -53,9 +53,6 @@ class CLearnablePredictor:
     
     sample = Utils.tracked2sample(data['tracked'])
     res = self._model(Utils.samples2inputs([sample]), startPos=data['pos'][None])
-#     res = self._model(Utils.samples2inputs([sample] * 32, dropout=0.1)) # (32, 2)
-#     res = res.mean(0)[None]
     with self._lock:
       self._inferResults = (res, data, {'samples': len(self._dataset), **trainInfo})
     return
-  
