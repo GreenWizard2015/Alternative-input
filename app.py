@@ -11,6 +11,7 @@ import cv2
 import os
 from Core.CFakeModel import CFakeModel
 import random
+import time
   
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
@@ -110,11 +111,11 @@ class App:
       # self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
       # self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
       if  not self._paused:
-        self._dataset.store(tracked, np.array(self._pos) / wh, pygame.time.get_ticks())
+        self._dataset.store(tracked, np.array(self._pos) / wh, time.time())
       
       self._lastTracked = {
         'tracked': tracked, 
-        'time': pygame.time.get_ticks(),
+        'time': time.time(),
         'debugGoal': np.array(self._pos) / wh,
         'pos': np.array(self._smoothedPrediction, np.float32)
       }

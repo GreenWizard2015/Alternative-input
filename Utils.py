@@ -236,4 +236,7 @@ def datasetFromFolder(folder):
     for k, v in data.items():
       dataset[k].append(v)
     continue
-  return {k: np.concatenate(v, axis=0) for k, v in dataset.items()}
+  
+  res = {k: np.concatenate(v, axis=0) for k, v in dataset.items()}
+  byTime = np.argsort(res['time'])
+  return {k: v[byTime] for k, v in res.items()}

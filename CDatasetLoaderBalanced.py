@@ -12,7 +12,7 @@ def _dict2arrays(d):
 class CDatasetLoaderBalanced(tf.keras.utils.Sequence):
   def __init__(self, 
     folder, batch_size, pointsDropout=0.0, eyeDropout=0.0,
-    goalHashScale=30, batchMult=None
+    goalHashScale=30, batchPerEpoch=None
   ):
     self.batch_size = batch_size
     self._pointsDropout = pointsDropout
@@ -41,16 +41,10 @@ class CDatasetLoaderBalanced(tf.keras.utils.Sequence):
       getBucket(hashA, hashB, hashC, hashD).append(index)
       continue
     samplesByGoals = _dict2arrays(samplesByGoals)
-    
-#     def d(x, lvl):
-#       print('\t' * lvl, len(x))
-#       if isinstance(x, list):
-#         for y in x: d(y, lvl+1)
-#     d(samplesByGoals, 0)
     self._samplesByGoals = samplesByGoals
     ###################
     N = len(samplesByGoals)
-    self._indexes = np.arange(math.ceil(N / float(batch_size)) * batch_size * batchMult) % N
+    self._indexes = np.arange(batch_size * batchPerEpoch) % N
     
     self.on_epoch_end()
     return
@@ -99,7 +93,7 @@ class CDatasetLoaderBalanced(tf.keras.utils.Sequence):
 if __name__ == '__main__':
   import cv2
   folder = os.path.dirname(__file__)
-  ds = CDatasetLoaderBalanced(os.path.join(folder, 'Dataset'), batch_size=16, pointsDropout=0.0, batchMult=1)
+  ds = CDatasetLoaderBalanced(os.path.join(folder, 'Dataset'), batch_size=16, pointsDropout=0.0, batchPerEpoch=1)
   print(len(ds))
   batchX, batchY = ds[0]
   print(batchX[0].shape)
