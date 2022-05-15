@@ -43,7 +43,7 @@ debug()
 trainDataset = CDatasetLoaderBalanced(
   os.path.join(folder, 'Dataset'), 
   batch_size=16, pointsDropout=0.25, eyeDropout=0.25,
-  batchMult=512*8*4
+  batchPerEpoch=512*8*4
 )
 batchN = len(trainDataset)
 

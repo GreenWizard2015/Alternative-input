@@ -18,7 +18,6 @@ class CDatasetLoaderBalanced(tf.keras.utils.Sequence):
     self._pointsDropout = pointsDropout
     self._eyeDropout = eyeDropout
     self._dataset = Utils.datasetFromFolder(folder)
-    print(len(self._dataset['goal']))
     ##################
     samplesByGoals = {}
     def getBucket(*hashes):
