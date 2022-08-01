@@ -6,12 +6,21 @@ import random
 import os
 import glob
 
-def limitGPUMemory(memory_limit):
-  import tensorflow as tf
-  gpus = tf.config.experimental.list_physical_devices('GPU')
-  tf.config.experimental.set_virtual_device_configuration(
-    gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
-  )
+def setupGPU(memory_limit=None):
+  if memory_limit and not('COLAB_GPU' in os.environ):
+    import tensorflow as tf
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    tf.config.experimental.set_virtual_device_configuration(
+      gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+    )
+    pass
+  
+  # https://github.com/tensorflow/tensorflow/issues/51818#issuecomment-923274891
+  try:
+    import keras
+    keras.layers.recurrent_v2._use_new_code = lambda: True
+  except:
+    pass
   return 
 
 FACE_PARTS_CONNECTIONS = {

@@ -7,7 +7,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     scaling='pow', # 'pow' or 'linear'
     maxFrequency=1e+4,
     useLowBands=True, useHighBands=True,
-    finalDropout=0.3, bandsDropout=True,
+    finalDropout=0.0, bandsDropout=True,
     sharedTransformation=False,
     **kwargs
   ):
@@ -25,7 +25,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     else:
       self._shifts = tf.constant(0.0, dtype=tf.float32)
 
-    maxN = 1 + N // 2 if useHighBands and useLowBands else N
+    maxN = 1 + (N // 2 if useHighBands and useLowBands else N)
     freq = self._createBands(scaling, maxFrequency, maxN)
     bands = []
     if useLowBands: bands.append(1.0 / freq[::-1])

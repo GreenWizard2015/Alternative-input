@@ -11,9 +11,9 @@ def FaceMeshEncoder(pointsN=468):
     lambda x: x[0] * tf.cast(tf.reduce_all(0.0 <= x[1], axis=-1), tf.float32)[..., None]
   )([encodedPoints, points])
   
-  encodedPoints = sMLP(shape=encodedPoints.shape[1:], sizes=[16, 8, 4])(encodedPoints)
+  encodedPoints = sMLP(sizes=[16, 8, 4, 1], activation='relu')(encodedPoints)
   pts = L.Flatten()(encodedPoints)
-  res = sMLP(shape=pts.shape[1:], sizes=[256, 128, 96])(pts)
+  res = sMLP(sizes=[256, ])(pts)
   
   return tf.keras.Model(
     inputs=[points],

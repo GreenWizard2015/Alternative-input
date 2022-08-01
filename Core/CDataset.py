@@ -1,17 +1,29 @@
 import threading
 import Utils
 import numpy as np
-import random
 from collections import defaultdict
 import os
 import time
+from Core.CSamplesStorage import CSamplesStorage
+from Core.CDataSampler import CDataSampler
  
 class CDataset:
-  def __init__(self, folder, maxSamples=20):
+  def __init__(self, folder, timesteps):
     self._lock = threading.RLock()
-    self._samples = defaultdict(list)
-    self._maxSamples = maxSamples
+    self._samples = CDataSampler(
+      CSamplesStorage(),
+      defaults=dict(
+        timesteps=timesteps,
+        return_tensors=True,
+        stepsSampling={'max frames': 2, 'include last': True},
+        # augmentations 
+        pointsDropout=0.25, pointsNoise=0.002,
+        eyesDropout=0.05, eyesAdditiveNoise=0.02,
+      )
+    )
+    self._timesteps = timesteps
     
+    self._totalSamples = 0
     self._storedSamples = []
     self._samplesPerChunk = 1000
     os.makedirs(folder, exist_ok=True)
@@ -35,17 +47,9 @@ class CDataset:
 
   def store(self, data, goal, T):
     data = Utils.tracked2sample(data)
-    sample = (data, {'goal': goal, 'time': T})
+    sample = {**data, 'goal': goal, 'time': T}
     with self._lock:
-      h = self._goal2hash(goal)
-      samples = self._samples[h]
-
-      if self._maxSamples < len(samples):
-        if 0.75 < random.random():
-          idx = random.randint(0, len(samples) - 1)
-          samples[idx] = sample
-      else:
-        samples.append(sample)
+      self._samples.add(sample)
       
       self._putToDistribution(goal)
       self._storedSamples.append(sample)
@@ -54,29 +58,20 @@ class CDataset:
     return
 
   def sample(self, N=16):
-    samples = []
     with self._lock:
-      buckets = list(self._samples.values())
-      if buckets:
-        for bucket in random.choices(buckets, k=N):
-          samples.append(random.choice(bucket))
+      res = self._samples.sample(N)
 
-    if len(samples) < N: return None
-    return(
-      Utils.samples2inputs([x for x, _ in samples], dropout=0.3), 
-      ( np.array([x['goal'] for _, x in samples], np.float32), )
-    )
+    return res
     
   def __len__(self):
     with self._lock:
-      return sum([len(x) for x in self._samples.values()], 0)
+      return len(self._samples)
     
   def _saveSamples(self):
     data = defaultdict(list)
-    for sampleData in self._storedSamples:
-      for sample in sampleData:
-        for k, v in sample.items():
-          data[k].append(v)
+    for sample in self._storedSamples:
+      for k, v in sample.items():
+        data[k].append(v)
       continue
     data = {k: np.array(v) for k, v in data.items()}
 
@@ -85,12 +80,13 @@ class CDataset:
     return
   
   def _goal2hash(self, goal):
-    return str(np.floor(np.array(goal) * 30))
+    return str(np.trunc(np.array(goal) * 30))
   
   def _putToDistribution(self, goal):
     M = 30
-    h = str(np.clip(np.floor(goal * M), 0, M - 1))
+    h = str(np.clip(np.trunc(goal * M), 0, M - 1))
     self._distrMap[h]['N'] += 1
+    self._totalSamples += 1
     return
   
   def distribution(self):
@@ -98,7 +94,7 @@ class CDataset:
     with self._lock:
       dmap = np.zeros((M, M, 1), np.float32)
       for x in self._distrMap.values():
-        goal = np.clip(np.floor(x['center'] * M), 0, M)
+        goal = np.clip(np.trunc(x['center'] * M), 0, M)
         cy, cx = goal.astype(np.int)
         dmap[cx, cy] = x['N']
         continue
@@ -116,3 +112,7 @@ class CDataset:
         continue
       continue
     return dm
+  
+  @property
+  def totalSamples(self):
+    return self._totalSamples
