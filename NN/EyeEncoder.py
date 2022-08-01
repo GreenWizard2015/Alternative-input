@@ -31,41 +31,6 @@ def createSobelsConv(sizes):
   maxD = max([x.shape[0] for x in res])
   kernels = [np.pad(k, (maxD - k.shape[0]) // 2) for k in res]
   return np.stack(kernels, axis=0)
-'''
-@tf.function
-def _EyeEnricher_processColors(srcImages):
-  contrasted = []
-  gammaAdjusted = []
-  for gamma in [4.0, 1.0, 1.0 / 4.0]:
-    images = tf.image.adjust_gamma(srcImages, gamma)
-    gammaAdjusted.append(images)
-    for contrast in [4.0, 8.0, 16.0]:
-      imgs = tf.image.adjust_contrast(images, contrast)
-      contrasted.append(imgs)
-      continue
-    continue
-  
-  res = [srcImages] + gammaAdjusted + contrasted
-  res = tf.concat(res, axis=-1)
-  return tf.stop_gradient(res) # prevent some issues with XLA
-'''
-
-@tf.function(jit_compile=True)
-def _EyeEnricher_processColors(srcImages):
-  gammaAdjusted = tf.image.adjust_gamma(
-    srcImages, 
-    tf.constant([4.0, 1.0, 1.0 / 4.0])
-  )
-
-  images = tf.repeat(gammaAdjusted, 3, axis=-1)
-  mean = tf.reduce_mean(images, axis=(1, 2), keepdims=True)
-  contrast = tf.constant([4.0, 8.0, 16.0])
-  contrast = tf.tile(contrast, (3, ))
-  contrasted = mean + (images - mean) * contrast
-
-  res = [srcImages, gammaAdjusted, contrasted]
-  res = tf.concat(res, axis=-1)
-  return tf.stop_gradient(res) # prevent some issues with XLA
 
 def _filters2conv(filters):
   ident = np.zeros(filters.shape[1:])
@@ -87,7 +52,6 @@ class CEyeEnricher(tf.keras.layers.Layer):
     return
   
   def call(self, x):
-#     x = _EyeEnricher_processColors(x) # B, H, W, N
     x = tf.transpose(x, (0, 3, 1, 2))[..., None] # B, N, H, W, 1
     x = tf.nn.conv2d(x, self._sobelConv, strides=1, padding='SAME') # B, N, H, W, C
     
