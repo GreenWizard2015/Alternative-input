@@ -3,18 +3,18 @@
 import numpy as np
 import pygame
 import pygame.locals as G
-from Core.CEyeTracker import CEyeTracker
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
+from Core.CMIDataset import CMIDataset
 from Core.CLearnablePredictor import CLearnablePredictor
-import cv2
 import os
-from Core.CFakeModel import CFakeModel
-import random
+from Core.CCoreModel import CCoreModel
+from Core.CGMModel import CGMModel
 import time
-from App.Utils import Colors, cv2ImageToSurface
+from App.Utils import Colors, densityToSurface
 import App.AppModes as AppModes
-  
+from App.CRandomIllumination import CRandomIllumination
+
 class App:
   def __init__(self, tracker, dataset, predictor):
     self._running = True
@@ -22,15 +22,17 @@ class App:
     self._lastPrediction = None
     self._smoothedPrediction = (0, 0)
     self._showPredictions = True
-    self._showSamplesDistribution = False
     
     self._tracker = tracker
-    self._eyes = [None, None]
     self._dataset = dataset
     self._predictor = predictor
     
     self._currentModeId = 0
     self._currentMode = AppModes.APP_MODES[0](self)
+    
+    self._history = []
+    self._density = None
+    self._illumination = CRandomIllumination()
     return
   
   @property
@@ -73,10 +75,6 @@ class App:
         self._showPredictions = not self._showPredictions
         return
       
-      if G.K_d == event.key:
-        self._showSamplesDistribution = not self._showSamplesDistribution
-        return
-      
       if G.K_1 <= event.key < (G.K_1 + len(AppModes.APP_MODES)):
         self._currentModeId = ind = event.key - G.K_1
         self._currentMode = AppModes.APP_MODES[ind](self)
@@ -86,13 +84,10 @@ class App:
     lastTracked = None
     tracked = self._tracker.track()
     if not(tracked is None):
-      # self._eyes[0] = cv2ImageToSurface(tracked['left eye']) if tracked['left eye visible'] else None
-      # self._eyes[1] = cv2ImageToSurface(tracked['right eye']) if tracked['right eye visible'] else None
       self._currentMode.accept(tracked)
       
       lastTracked = {
-        'tracked': tracked, 
-        'time': time.time(),
+        'tracked': tracked,
         'pos': np.array(self._smoothedPrediction, np.float32)
       }
       pass
@@ -100,31 +95,46 @@ class App:
     prediction = self._predictor(lastTracked)
     if not(prediction is None):
       self._lastPrediction = prediction
-      predPos = self._lastPrediction[0]['coords']
-      d = 128.0/4
-      self._lastPrediction[0]['coords'] = np.floor(predPos * d + .5) / d
-    
+      pred = prediction[0]
+      density = densityToSurface(pred['density'].numpy())
+      W, H = self.WH
+      density = pygame.transform.scale(density, (int(W), int(H)))
+      self._density = density
+
+      self._history.append(pred['coords'])
+      self._history = self._history[-15:]
+      # if not self._currentMode._paused:
+      #   self._dataset.store(
+      #     pred['latent'].numpy()[0],
+      #     pred['coords'],
+      #     self._currentMode._pos,
+      #     prediction[1]['pos']
+      #   )
+      
     if self._lastPrediction:
-      factor = 0.95
-      predPos = self._lastPrediction[0]['coords'][-1]
-      print(predPos)
+      factor = 0.9
+      pred = self._lastPrediction[0]
+      predPos = pred['coords']
       self._smoothedPrediction = np.clip(
         np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
         0.0, 1.0
       )
     #####################
     self._currentMode.on_tick(deltaT)
+    self._illumination.on_tick(deltaT)
     return
     
   def on_render(self):
     window = self._display_surf
-    window.fill(Colors.SILVER)
+    # take color from Colors.asList based on current time, change every 5 seconds
+    clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
+    window.fill(clr)
+    
+    if not(self._density is None):
+      window.blit(self._density, (0, 0))
 
-    if self._showSamplesDistribution:
-      window.blit(self._distrMap, self._distrMap.get_rect(topleft=(0, 0)))
-        
+    self._illumination.on_render(window)
     self._currentMode.on_render(window)
-    self._renderEyes()
     self._renderPredictions()
     
     self.drawText('Samples: %d' % (self._dataset.totalSamples, ), (5, 95), Colors.RED)
@@ -137,6 +147,7 @@ class App:
     if not(self._lastPrediction is None):
       predicted, data, info = self._lastPrediction
       positions = predicted['coords']
+      positions = self._history
       positions = np.array(positions) * wh[None]
       positions = positions.astype(np.int32)
       
@@ -147,30 +158,21 @@ class App:
           continue
         self.drawObject(tuple(positions[-1]), R=5, color=Colors.RED)
 
-        sp = np.multiply(self._smoothedPrediction, wh)
-        self.drawObject(tuple(int(x) for x in sp), R=5, color=Colors.BLACK)
-          
+        sp = np.multiply(self._smoothedPrediction, wh).astype(np.int32)
+        self.drawObject(tuple(sp), R=5, color=Colors.BLACK)
+
         self.drawText(str(positions), (5, 5), Colors.BLACK)
+#         self.drawText(
+#           str(predicted['MI']),
+#           tuple(int(x) for x in sp), 
+#           color=Colors.RED
+#         )
         pass
       self.drawText(str(info), (5, 35), Colors.BLACK)
+      
+      sp = np.multiply(predicted['sampled'], wh).astype(np.int32)
+      self.drawObject(tuple(sp), R=3, color=Colors.BLUE)
       pass
-    return
-
-  def _renderEyes(self):
-    window = self._display_surf
-    if not (self._eyes[0] is None):
-      x = pygame.transform.scale(self._eyes[0], (128, 128))
-      window.blit(
-        x,
-        x.get_rect(topleft=window.get_rect().inflate(-10, -10).topleft)
-      )
-    
-    if not (self._eyes[1] is None):
-      x = pygame.transform.scale(self._eyes[1], (128, 128))
-      window.blit(
-        x,
-        x.get_rect(topleft=window.get_rect().inflate(-10, -10 - 2*128).topleft)
-      )
     return
    
   def run(self):
@@ -200,51 +202,42 @@ class App:
     return
 
   def drawObject(self, pos, R=10, color=Colors.WHITE):
+    # if white - draw circle with black border
+    if np.all(np.equal(color, Colors.WHITE)):
+      pygame.draw.circle(self._display_surf, Colors.BLACK, pos, R + 4, 0)
+      pygame.draw.circle(self._display_surf, Colors.RED, pos, R + 2, 0)
+      
     pygame.draw.circle(self._display_surf, color, pos, R, 0)
     return
 
-  def sampleNextGoal(self, prev=None):
-    def dist(a, b): return np.sqrt(np.square(np.subtract(a, b)).sum())
-    wh = np.array(self._display_surf.get_size())
-    pos = (0.5, 0.5) if prev is None else np.array(prev, np.float32)
-    distr, dMap = self._dataset.distribution()
-    ##########
-    dMap = dMap.astype(np.float32)
-    dMap = np.clip(dMap, 0, dMap[dMap < dMap.mean()].mean())
-    dMap /= 1 + dMap.max()
-    dMap = cv2ImageToSurface(
-      cv2.cvtColor(127 + (dMap * 255.0 / 2.), cv2.COLOR_GRAY2BGR).astype(np.uint8)
-    )
-    self._distrMap = pygame.transform.scale(dMap, tuple(wh))
-    ##########
-    distr = [(c, N, dist(pos, c)) for c, N in distr]
-    distr = [(c, N, d) for c, N, d in distr if (0.1 < d) and (d < 0.75)]
-    maxN = float(max([x[1] for x in distr]))
-    if maxN < 1: maxN = 1
-    distr = [(c, (maxN - N) / maxN) for c, N, d in distr if (0.1 < d) and (d < 0.75)]
-    random.shuffle(distr) # shuffle same values order
-    candidates = list(sorted(distr, key=lambda x: x[1]))[-16:]
-    goal, _ = random.choice(candidates)
-    return goal
-    
-def main():
-  folder = os.path.dirname(__file__)
-  model = CFakeModel(
-    # autoregressive
-    model='simple', depth=15*2*2,
+def modeA(folder):    
+  gmm = CGMModel(
     F2LArgs={'steps': 5},
     weights={'folder': folder},
-    trainable=not False
+    trainable=False
   )
-   
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset:
+  model = CCoreModel(gmm, trainable=not True, weights={'folder': folder})
+
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset, CMIDataset() as MID:
+    dataset = MID
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()
+      model.save(folder)
+      pass
+    pass
   return
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), None) as dataset:
-    app = App(tracker, dataset, predictor=lambda x: None)
+
+def modeB(folder):
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset-test'), 5) as dataset:
+    app = App(tracker, dataset, predictor=lambda *x: None)
     app.run()
+    pass
+  return
+
+def main():
+  folder = os.path.dirname(__file__, 'Data')
+  modeB(folder)
   return
 
 if __name__ == '__main__':

@@ -2,7 +2,5 @@ __pycache__
 /.settings
 /.pydevproject
 /.project
-/Dataset
-/*.h5
-/*.png
-/*.npz
+/Data/
+/.vscode

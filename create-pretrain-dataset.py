@@ -2,25 +2,27 @@
 # -*- coding: utf-8 -*-.
 import numpy as np
 import random
-import os
+import os, shutil
 import Core.Utils as Utils
 Utils.setupGPU(memory_limit=1024)
 from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 from collections import defaultdict
 
-BATCH_SIZE = 128 * 4
 SAMPLES_PER_BUCKET = 5
-SAMPLE_ONCE = True
+SAMPLE_ONCE = not True
 PARAMS = dict(
   timesteps=5,
-  stepsSampling='last',
+  stepsSampling={'max frames': 5, 'include last': False},
   maxT=1.0,
+  # augmentations
+  pointsDropout=0.1, pointsNoise=0.001,
+  eyesDropout=0., eyesAdditiveNoise=0.005, brightnessFactor=1.5, lightBlobFactor=1.5,
 )
 
 folder = os.path.dirname(__file__)
 folder = os.path.join(folder, 'Data')
-outputFolder = os.path.join(folder, 'test')
+output = os.path.join(folder, 'pretrain.npz')
 
 def samplesStream():
   ds = CDataSampler( CSamplesStorage(), defaults=PARAMS )
@@ -45,54 +47,32 @@ def samplesStream():
       N = min(len(y), samplesN)
       samplesN -= N
       for idx in range(N):
-        for kind in ['clean']:
+        for kind in ['augmented']:
           res = {k: v[idx, None].numpy() for k, v in x[kind].items()}
           res['y'] = y[idx, None]
           yield res
         continue
-    continue
-  return
-
-def batches():
-  data = defaultdict(list)
-  for sample in samplesStream():
-    for k, v in sample.items():
-      data[k].append(v)
       continue
-
-    if BATCH_SIZE <= len(data['y']):
-      yield data
-      data = defaultdict(list)
     continue
-
-  if 0 < len(data['y']):
-    # copy data to match batch size
-    for k, v in data.items():
-      while len(v) < BATCH_SIZE: v.extend(v)
-      data[k] = v[:BATCH_SIZE]
-      continue
-    yield data
   return
 ############################################
-# clear output folder
-if os.path.exists(outputFolder):
-  # remove test-*.npz files
-  for fname in os.listdir(outputFolder):
-    if fname.startswith('test-') and fname.endswith('.npz'):
-      os.remove(os.path.join(outputFolder, fname))
+N = 0
+data = defaultdict(list)
+for sample in samplesStream():
+  for k, v in sample.items():
+    data[k].append(v)
     continue
-else:
-  os.makedirs(outputFolder)
-
-totalSize = 0
-for bIndex, batch in enumerate(batches()):
-  fname = os.path.join(outputFolder, 'test-%d.npz' % bIndex)
-  # concatenate all arrays
-  batch = {k: np.concatenate(v, axis=0) for k, v in batch.items()}
-  np.savez(fname, **batch)
-  # get fname size
-  size = os.path.getsize(fname)
-  totalSize += size
-  print('%d | Size: %d MB | Total: %d MB' % (bIndex + 1, size // 1024 // 1024, totalSize // 1024 // 1024))
+  N += 1
+  if (N % 1000) == 0: print(N)
   continue
+
+data = {k: np.concatenate(v, axis=0) for k, v in data.items()}
+# shuffle
+indices = np.arange(len(data['y']))
+np.random.shuffle(indices)
+for k, v in data.items():
+  data[k] = v[indices]
+  continue
+
+np.savez_compressed(output, **data)
 print('Done')

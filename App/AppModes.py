@@ -24,7 +24,7 @@ class CAppMode:
   
   def accept(self, tracked):
     if self._paused: return
-    self._app._dataset.store(tracked, np.array(self._pos), time.time())
+    self._app._dataset.store(tracked, np.array(self._pos))
     return
   pass
 
@@ -128,8 +128,12 @@ class CCircleMovingMode(CMoveToGoal):
 class CLookAtMode(CAppMode):
   def __init__(self, app):
     super().__init__(app)
-    self._goal = None
     self._visibleT = 5.0
+    self._next()
+    return
+  
+  def _next(self):
+    self._pos = np.random.uniform(size=(2,))
     self._active = False
     self._startT = None
     return
@@ -142,19 +146,11 @@ class CLookAtMode(CAppMode):
     return
   
   def on_tick(self, deltaT):
-    if self._goal is None: self._next()
-    
     if self._active:
       dT = time.time() - self._startT
       if self._visibleT < dT: self._next()
     else:
       self._startT = time.time()
-    return
-  
-  def _next(self):
-    self._goal = self._app.sampleNextGoal(self._goal)
-    self._active = False
-    self._startT = None
     return
   
   def accept(self, tracked):
@@ -165,7 +161,7 @@ class CLookAtMode(CAppMode):
   def on_render(self, window):
     super().on_render(window)
     wh = np.array(window.get_size())
-    pos = tuple(int(x) for x in np.multiply(wh, self._goal))
+    pos = tuple(int(x) for x in np.multiply(wh, self._pos))
     
     if self._active:
       self._app.drawObject(pos, color=Colors.RED)
@@ -196,7 +192,7 @@ class CSplineMode(CAppMode):
     
     speed = np.random.uniform(0.15, 1.0, size=1)[0]
     T = distance[-1] / speed
-    self._maxT = np.clip(T, 5, 20)
+    self._maxT = np.clip(T, 20, 40)
     distance /= distance[-1]
     
     shift = distance[N - 1] if extend else 0.0
@@ -269,9 +265,9 @@ class CCornerMode(CAppMode):
   pass
 #####################
 APP_MODES = [
+  CLookAtMode,
   CCornerMode,
   CSplineMode,
-  CFollowMode,
+#   CFollowMode,
   CCircleMovingMode,
-  CLookAtMode
 ]

@@ -1,7 +1,8 @@
 import cv2
 import mediapipe
-import Utils
+import Core.Utils as Utils
 import numpy as np
+import time
 
 class CEyeTracker:
   def __init__(self):
@@ -30,18 +31,29 @@ class CEyeTracker:
 
   def track(self):
     ret, frame = self._capture.read()
-    # Make detection
-    results = self._pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    # Make detection in BGR space
+    results = self._pose.process(frame)
     image = frame
-    facePoints, LE, RE = self._processFace(results, image)
+    facePoints, LE, RE, lipsDistancePx = self._processFace(results, image)
+    
+    REVisible = 5 < len(RE)
+    LEVisible = 5 < len(LE)
+    # if eyes are invisible, try to find RGB
+    if not(REVisible or LEVisible):
+      results = self._pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+      facePoints, LE, RE, lipsDistancePx = self._processFace(results, image)
+      pass
+
     res = {
-      'raw': image,
-      'size': image.shape[:2],
+      'time': time.time(),
+      'raw': frame,
+      'size': frame.shape[:2],
       'face points': facePoints,
       'right eye': self._extract(image, RE),
       'right eye visible': 5 < len(RE),
       'left eye': self._extract(image, LE),
       'left eye visible': 5 < len(LE),
+      'lips distance': lipsDistancePx
     }
     return res
   
@@ -63,6 +75,7 @@ class CEyeTracker:
     facePoints = {}
     LE = []
     RE = []
+    lipsDistancePx = 0
 
     landmarks = pose.face_landmarks
     if landmarks:
@@ -79,4 +92,7 @@ class CEyeTracker:
         if 'left eye' == Utils.INDEX_TO_PART.get(idx, ''):
           LE.append(pt)
         continue
-    return(facePoints, LE, RE)
+
+      lipsDistancePx = np.linalg.norm(np.subtract(face_points_scaled[17], face_points_scaled[0]))
+      pass
+    return(facePoints, LE, RE, lipsDistancePx)

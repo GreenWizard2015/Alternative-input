@@ -2,7 +2,7 @@ import tensorflow as tf
 import tensorflow.keras.layers as L
 
 import numpy as np
-from NN.Utils import sMLP
+from NN.Utils import sMLP, CConvPE, CStackApplySplit
 ####################################
 def custom_sobel(shape):
   res = []
@@ -43,12 +43,7 @@ def _filters2conv(filters):
 class CEyeEnricher(tf.keras.layers.Layer):
   def __init__(self, **kwargs):
     super().__init__(**kwargs)
-    self._sobelConv = _filters2conv(createSobelsConv([3, 5, 7, 11, 13]))
-    self._PE = tf.Variable(
-      initial_value=tf.zeros((1, 32, 32, 1), dtype="float32"),
-      trainable=True, dtype="float32",
-      name=self.name + '/_PE'
-    )
+    self._sobelConv = _filters2conv(createSobelsConv([3, 5, 7, 9, 11, 13]))
     return
   
   def call(self, x):
@@ -57,27 +52,33 @@ class CEyeEnricher(tf.keras.layers.Layer):
     
     B = tf.shape(x)[0]
     _, N, H, W, C = x.shape
-    res = tf.reshape(
+    return tf.reshape(
       tf.transpose(x, (0, 2, 3, 1, 4)), 
       (B, H, W, N * C)
-    ) # B, H, W, N * C
-
-    pe = tf.repeat(self._PE, B, axis=0)
-    return tf.concat([res, pe], axis=-1)
-    
+    )
 ####################################
 def eyeEncoderConv(shape):
   eye = L.Input(shape)
   
   res = CEyeEnricher()(eye)
-  for sz in [128, 128, 128, 64]:
-    res = L.Dropout(0.1)(res)
+  res = L.Dropout(0.1)(res)
+  features = []
+  for sz in [64, 64, 64, 64]:
+    res = CConvPE(channels=3, activation='relu')(res)
     for _ in range(1):
       res = L.Conv2D(sz, 3, padding='same', activation='relu')(res)
-    res = L.MaxPooling2D()(res)
-    continue
 
-  res = L.Flatten()(res)
+    res = L.MaxPooling2D()(res)
+    features.append(
+      L.Conv2D(1, 3, padding='same', activation='relu')(
+        L.Dropout(0.1)(res)
+      )
+    )
+    continue
+  
+  features = L.Concatenate(-1)([L.Flatten()(x) for x in features])
+  res = features
+
   return tf.keras.Model(
     inputs=[eye],
     outputs=[res],
@@ -87,15 +88,20 @@ def eyeEncoderConv(shape):
 def eyeEncoder(shape=(32, 32, 1), latentSize=256):
   eyeL = L.Input(shape)
   eyeR = L.Input(shape)
+  context = L.Input((32,))
   
-  encoder = eyeEncoderConv(shape) # shared encoder
-  encodedL = encoder(eyeL)
-  encodedR = encoder(eyeR)
+  encodedL, encodedR = CStackApplySplit(
+    eyeEncoderConv(shape) # shared encoder
+  )(eyeL, eyeR)
+
+  ctx = sMLP(sizes=[64, 64], activation='relu')(context)
+  encodedL = L.Concatenate(-1)([encodedL, ctx])
+  encodedR = L.Concatenate(-1)([encodedR, ctx])
   # NOT shared MLP
-  resL = sMLP(sizes=[256, latentSize])(encodedL)
-  resR = sMLP(sizes=[256, latentSize])(encodedR)
+  resL = sMLP(sizes=[256, latentSize], activation='relu')(encodedL)
+  resR = sMLP(sizes=[256, latentSize], activation='relu')(encodedR)
   return tf.keras.Model(
-    inputs=[eyeL, eyeR],
+    inputs=[eyeL, eyeR, context],
     outputs=[resL, resR],
     name='eyeEncoder'
   )

@@ -9,11 +9,26 @@ class Colors:
   GREEN = (0, 255, 0)
   RED = (255, 0, 0)
   PURPLE = (255, 0, 255)
-
+# take colors from matplotlib and add to Colors
+def _makeColors():
+  import matplotlib.colors as mcolors
+  for name, hex in mcolors.cnames.items():
+    setattr(Colors, name.upper(), tuple(int(hex[i:i+2], 16) for i in (1, 3, 5)))
+  return
+_makeColors()
+# add all colors to a list, if its RGB. use __dict__.values()
+Colors.asList = [rgb for rgb in Colors.__dict__.values() if type(rgb) == tuple and len(rgb) == 3]
+################################################
 def normalized(a, axis=-1, order=2):
   l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
   l2[l2==0] = 1
   return a / np.expand_dims(l2, axis)
+
+def densityToSurface(cv2Image):
+  size = cv2Image.shape[:-1]
+  fmt = 'RGB'
+  surface = pygame.image.frombuffer(cv2Image.flatten(), size, fmt)
+  return surface.convert()
 
 def cv2ImageToSurface(cv2Image):
   if cv2Image.dtype.name == 'uint16':

@@ -1,5 +1,6 @@
 import tensorflow as tf
 from NN.Utils import sMLP
+import itertools
 
 def reduce_mean_masked(x, mask):
   N = tf.reduce_sum(mask, axis=-1, keepdims=True)
@@ -10,8 +11,8 @@ def reduce_mean_masked(x, mask):
 class SeparableCritic(tf.keras.Model):
   def __init__(self, **kwargs):
     super().__init__(**kwargs)
-    self._g = sMLP([128, 64, 1], name='%s/g' % (self.name,))
-    self._h = sMLP([128, 64, 1], name='%s/h' % (self.name,))
+    self._g = sMLP([128, 64, 1], 'relu', name='%s/g' % (self.name,))
+    self._h = sMLP([128, 64, 1], 'relu', name='%s/h' % (self.name,))
     return
 
   def call(self, x, y):
@@ -23,19 +24,24 @@ class SeparableCritic(tf.keras.Model):
 class ConcatCritic(tf.keras.Model):
   def __init__(self, **kwargs):
     super().__init__(**kwargs)
-    self._g = sMLP([128, 64, 1], 'linear', name='%s/g' % (self.name,))
+    self._g = sMLP([128, 128, 64, 64, 64, 1], 'relu', name='%s/g' % (self.name,))
     return
 
   def call(self, x, y):
-    batch_size = tf.shape(x)[0]
+    B = tf.shape(x)[0]
     # Tile all possible combinations of x and y
-    x_tiled = tf.tile(x[None, :],  (batch_size, 1, 1))
-    y_tiled = tf.tile(y[:, None],  (1, batch_size, 1))
-    # xy is [batch_size * batch_size, x_dim + y_dim]
-    xy_pairs = tf.reshape(tf.concat((x_tiled, y_tiled), axis=2), [batch_size * batch_size, -1])
+    x_tiled = tf.tile(x[None, :],  (B, 1, 1))
+    y_tiled = tf.tile(y[:, None],  (1, B, 1))
+    # xy is [B * B, x_dim + y_dim]
+    xy_pairs = tf.reshape(
+      tf.concat((x_tiled, y_tiled), axis=2),
+      [B * B, -1]
+    )
     # Compute scores for each x_i, y_j pair.
-    scores = self._g(xy_pairs) 
-    return tf.transpose(tf.reshape(scores, [batch_size, batch_size]))
+    scores = self._g(xy_pairs)
+    scores = tf.reshape(scores, [B, B])
+    scores = tf.transpose(scores)
+    return scores
  
 class EnsembledCritic(tf.keras.Model):
   def __init__(self, NCritics, critic=SeparableCritic, **kwargs):
@@ -58,26 +64,44 @@ class EnsembledCritic(tf.keras.Model):
 class MIModel(tf.keras.Model):
   def __init__(self, **kwargs):
     super().__init__(**kwargs)
-    self._scores = SeparableCritic()
+#     self._scores = SeparableCritic()
+    self._scores = ConcatCritic()
     self._alpha = sMLP([168, 64, 1], 'relu')
-    self.optimizer = tf.optimizers.Adam(learning_rate=1e-4)
     return
   
   def call(self, x, y, mask=None):
     B = tf.shape(x)[0]
-    scores = self._scores(x, y)
-    alpha = self._alpha(y)
+    if tf.is_tensor(y):
+      scores = self._scores(x, y)
+    else:
+      permutations = [
+        tf.concat(perm, axis=-1)
+        for perm in itertools.permutations(y)
+      ]
+
+      scores = [
+        self._scores(x, tf.concat(perm, axis=-1))
+        for perm in permutations
+      ]
+      scores = tf.concat(scores, axis=-1)
+      y = permutations[0] # same as tf.concat(y, axis=-1)
+      pass
+
+    tf.assert_equal(tf.shape(scores)[:1], (B, ))
+    
+    log_alpha = self._alpha(y)
+    scores = scores - log_alpha
     
     joint = tf.linalg.diag_part(scores)[..., None]
     tf.assert_equal(tf.shape(joint), (B, 1))
     
     if mask is None:
-      mask = tf.linalg.tensor_diag(tf.ones((B, ), dtype=x.dtype))
+      mask = tf.ones((tf.shape(scores)[-1], ), dtype=x.dtype)
+      mask = tf.linalg.tensor_diag(mask)[:B]
     tf.assert_equal(tf.shape(scores), tf.shape(mask))
-    
+     
     marginal = reduce_mean_masked(scores, 1.0 - mask)
     tf.assert_equal(tf.shape(joint), tf.shape(marginal))
-    tf.assert_equal(tf.shape(alpha), tf.shape(marginal))
-    
-    mi = 1.0 + joint - (tf.exp(marginal - alpha) + alpha)
+
+    mi = 1.0 + joint - tf.exp(marginal)
     return mi

@@ -56,9 +56,13 @@ class CSamplesStorageChunk:
     return
 
 class CSamplesStorage:
-  def __init__(self):
+  def __init__(self, contextsDuration=[60 * 60, 60, 1]):
     self._head = None
     self._latestT = -np.inf
+
+    self._contextsDuration = contextsDuration
+    self._contextsId = [-1] * len(contextsDuration)
+    self._contextsT = [-np.inf] * len(contextsDuration)
     return
 
   def __len__(self):
@@ -70,35 +74,70 @@ class CSamplesStorage:
   def __getitem__(self, idx):
     return self._head.get(idx)
   
+  def _contextFor(self, sample):
+    T = sample['time']
+    assert self._latestT < T
+
+    zipped = zip(self._contextsDuration, self._contextsId)
+    for i, (contextDuration, contextId) in enumerate(zipped):
+      if self._latestT + contextDuration < T:
+        self._contextsId[i] = contextId + 1
+        self._contextsT[i] = T
+      continue
+    self._latestT = T
+    return np.array(self._contextsId, dtype=np.int32)
+
   def add(self, sample):
     if not self._head:
       self._head = CSamplesStorageChunk()
-    assert self._latestT < sample['time']
+    T = sample['time']
     
-    self._latestT = sample['time']
+    # copy the sample and add the ContextID field
+    sample = {k: v for k, v in sample.items()}
+    sample['ContextID'] = self._contextFor(sample)
+    
+    self._latestT = T
     return self._head.add(sample)
   
   def addBlock(self, samples):
-    T = samples['time']
-    assert self._latestT < T[0]
-    assert all(a < b for a, b in zip(T[:-1], T[1:]))
-    
+    assert all(isinstance(v, np.ndarray) for v in samples.values())
+    N = len(samples['time'])
+    # copy the sample and add the ContextID field
+    samples = {k: v for k, v in samples.items()}
+    contextId = [
+      self._contextFor({k: v[i] for k, v in samples.items()}) 
+      for i in range(N)
+    ]
+    samples['ContextID'] = np.array(contextId, dtype=np.int32)
+
     startIndex = len(self)
     block = CSamplesStorageChunk(samples=samples)
     if not self._head:
       self._head = block
     else:
       self._head.append(block)
-      
-    self._latestT = T[-1]
-    return np.arange(startIndex, startIndex + len(T))
+    return np.arange(startIndex, startIndex + N)
   
+  @property
+  def contexts(self):
+    return [1 + x for x in self._contextsId]
+
 if __name__ == '__main__':
-  import os, Utils
+  import os, Core.Utils as Utils
   folder = os.path.dirname(os.path.dirname(__file__))
   ds = CSamplesStorage()
-  ds.addBlock(Utils.datasetFromFolder(os.path.join(folder, 'Dataset')))
+  # ds.addBlock(Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset')))
+  ds.addBlock(Utils.datasetFrom(os.path.join(folder, 'Data', 'test.npz')))
   print(len(ds))
   s = ds[0]
   print(list(s.keys()))
+  ContextID = set()
+  for i in range(len(ds)):
+    s = ds[i]
+    ContextID.add(tuple(s['ContextID']))
+  # sorted(ContextID)
+  print(sorted(ContextID))
+  print(len(ContextID))
+  print(ds.contexts)
+
   pass

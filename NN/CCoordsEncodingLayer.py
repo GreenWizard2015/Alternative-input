@@ -7,7 +7,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     scaling='pow', # 'pow' or 'linear'
     maxFrequency=1e+4,
     useLowBands=True, useHighBands=True,
-    finalDropout=0.0, bandsDropout=True,
+    finalDropout=0.1, bandsDropout=True,
     sharedTransformation=False,
     **kwargs
   ):
@@ -70,12 +70,12 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     )
     return
 
-  @tf.function
+  #@tf.function
   def _fussion(self, x):
     res = tf.reduce_sum(x * self._fussionW, axis=-1) + self._fussionB
     return res
   
-  @tf.function
+  #@tf.function
   def _transform(self, x):
     B, M, P, N = tf.shape(x)[0], x.shape[1], x.shape[2], self._N
     data = []
@@ -94,7 +94,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     tf.assert_equal(tf.shape(res)[:-1], (B, M, N, P))
     return tf.reshape(res, (B, M, N, res.shape[-1] * P))
   
-  @tf.function
+  #@tf.function
   def call(self, x, training=None):
     # x is (B, M, P)
     # output is (B, M, N)
@@ -146,12 +146,11 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       mask = tf.cast(normed < noise, x.dtype) / (1.0 - normed)
       return x * tf.stop_gradient(mask)
     
-    @tf.function
+    #@tf.function
     def F(x, training):
-      if training is None:
-        training = tf.keras.backend.learning_phase()
-      training = tf.cast(training, tf.bool)
-      return tf.cond(training, lambda: apply(x), lambda: tf.identity(x))
+      if training:
+        return apply(x)
+      return x
     return F
   
   def _createBands(self, scaling, maxFrequency, N):

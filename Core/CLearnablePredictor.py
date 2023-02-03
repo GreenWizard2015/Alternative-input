@@ -1,6 +1,5 @@
 import threading
-from .CFakeModel import CFakeModel
-import Utils
+import Core.Utils as Utils
 import numpy
 
 class CLearnablePredictor:
@@ -10,8 +9,8 @@ class CLearnablePredictor:
     self._done = threading.Event()
     self._inferData = None
     self._inferResults = None
-    self._model = CFakeModel() if model is None else model
-    self._timesteps = self._model.timesteps
+    self._model = model
+    self._timesteps = 0 + self._model.timesteps
     self._prevSteps = []
     return
 
@@ -30,7 +29,8 @@ class CLearnablePredictor:
       if not(data is None):
         if self._timesteps:
           arr = self._prevSteps + [data,]
-          self._prevSteps = self._inferData = list(arr[-self._timesteps:]) # COPY of list
+          self._prevSteps = list(arr[-self._timesteps:]) # COPY of list
+          self._inferData = self._prevSteps # same as self._prevSteps
         else:
           self._inferData = data
         pass
@@ -48,7 +48,7 @@ class CLearnablePredictor:
   
   def _train(self):
     info = {}
-    if self._model.trainable:
+    if self._model.trainable and not(self._dataset is None):
       data = self._dataset.sample()
       if data:
         info = self._model.fit(data)
@@ -60,20 +60,21 @@ class CLearnablePredictor:
       self._inferData = None
     if data is None: return
     
-    X = None
-    if self._timesteps:
-      if not(len(data) == self._timesteps): return
-      samples = Utils.samples2inputs([Utils.tracked2sample(x['tracked']) for x in data])
-      X = [x[None] for x in samples] # (timesteps, ...) => (1, timesteps, ...)
-      
-      data = data[-1] # last step as current
-    else:
-      X = Utils.samples2inputs([
-        Utils.tracked2sample(data['tracked'])
-      ])
-      pass
+    if not(len(data) == self._timesteps): return
+    samples = [Utils.tracked2sample(x['tracked']) for x in data]
+    samples = Utils.samples2inputs(samples)
+    T = numpy.diff(samples['time'], 1)
+    T = numpy.insert(T, 0, 0.0)
+    samples['time'] = T.reshape((self._timesteps, 1))
+    X = {k: x[None] for k, x in samples.items()} # (timesteps, ...) => (1, timesteps, ...)
+
+    data = data[-1] # last step as current
     
-    res = self._model(X, startPos=data['pos'][None])
+    res = self._model.extended(X) # , startPos=data['pos'][None])
+    info = dict(trainInfo)
+    if not(self._dataset is None):
+      info['samples'] = len(self._dataset)
+      
     with self._lock:
-      self._inferResults = (res, data, {'samples': len(self._dataset), **trainInfo})
+      self._inferResults = (res, data, info)
     return

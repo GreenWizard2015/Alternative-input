@@ -1,66 +1,77 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
+from collections import defaultdict
 import numpy as np
-from Core.CFakeModel import CFakeModel
+from Core.CCoreModel import CCoreModel
 import os, imageio
 import matplotlib.pyplot as plt
-import Utils
+import Core.Utils as Utils
 import tensorflow as tf
 from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 import matplotlib.patches as patches
 
 import tensorflow_probability as tfp
+from Core.CGMModel import CGMModel
 tfd = tfp.distributions
 
-import seaborn as sns
+###################
+GRID_HW = 500
+GRID_MIN = -0.1
+GRID_MAX = 1.1
+def makeGrid():
+  import numpy as np
+  xy = np.linspace(GRID_MIN, GRID_MAX, GRID_HW)
+  XY = np.meshgrid(xy, xy)
+  res = np.concatenate([x.reshape(-1, 1) for x in XY], axis=-1)
+  return tf.constant(res, tf.float32)
+gridTF = makeGrid()
+
+def distr2image(distr):
+  lp = distr.log_prob(gridTF)
+  lp = tf.maximum(0., lp)
+  lp = tf.reshape(lp, (-1,))
+  return lp
+###################
 
 np.set_printoptions(precision=4, threshold=7777, suppress=True, linewidth=120)
-folder = os.path.dirname(__file__)
+folder = os.path.join(os.path.dirname(__file__), 'Data')
 
-model = CFakeModel(
-  model='simple', depth=15,
-  F2LArgs={'steps': 5},
-  weights={'folder': folder}, 
-  trainable=False
+gmm = CGMModel(
+  F2LArgs=dict(steps=5, contexts=[11, 20, 99, 514]),
+  weights={'folder': folder},
+  trainable=False,
+  useDiscriminator=False,
 )
+model = CCoreModel(gmm)
 
-folder = os.path.dirname(__file__)
 ds = CDataSampler( 
   CSamplesStorage(),
   defaults={
-    'timesteps': model.timesteps,
+    'timesteps': 5,
     'maxT': 1.0,
     'pointsDropout': 0.0,
     'eyesDropout': 0.0,
+    'contextShift': [9, 18, 96, 512],
+    'shiftsN': -1,
   }
 )
-ds.addBlock(Utils.datasetFromFolder(os.path.join(folder, 'Dataset')))
+ds.addBlock(Utils.datasetFrom(os.path.join(folder, 'test.npz')))
 
 def batched(BATCH = 128):
-    batch = (([], [], []), ([], ))
-    for ind in range(51111, len(ds)):
-        data = ds.sampleById(ind, stepsSampling='last')
-        if data is None: continue
-        X, (Y,) = data
-        for B, v in zip(batch[0], X):
-            B.append(v[0])
-        batch[1][0].append(Y[0])
+  batchIds = []
+  for ind in range(len(ds)):
+    if not ds.checkById(ind, stepsSampling='last'): continue
+    batchIds.append(ind)
+    if len(batchIds) < BATCH: continue
+    yield ds.sampleByIds(batchIds, stepsSampling='last')[0]
+    batchIds = []
+    continue
+  if 0 < len(batchIds):
+    yield ds.sampleByIds(batchIds, stepsSampling='last')[0]
+  return
 
-        if len(batch[0][0]) < BATCH: continue
-        yield(
-          [np.array(x, np.float32) for x in batch[0]],
-          [np.array(batch[1][0], np.float32)]
-        )
-        batch = (([], [], []), ([], ))
-        continue
-    if 0 < len(batch[0]):
-        yield(
-          [np.array(x, np.float32) for x in batch[0]],
-          [np.array(batch[1][0], np.float32)]
-        )
-    return
-
+grid = gridTF.numpy()
 frame = 0
 plt.figure(figsize=(8, 8))
 started = False
@@ -76,7 +87,7 @@ with imageio.get_writer('movie.avi', mode='I') as writer:
       )
     if not started: continue
     
-    pred = model(X)
+    pred = model(X['clean'])
     for i in range(len(gtY)):
         print(frame)
         try:
@@ -92,14 +103,14 @@ with imageio.get_writer('movie.avi', mode='I') as writer:
           plt.plot([pos[0]], [pos[1]], 'o', color='green', markersize=2)
           ###############
           gmm = pred['distribution'][ind]
-          try:
-            sampled = gmm.sample(1e4).numpy()
-            sns.kdeplot(
-                x=sampled[:, 0], y=sampled[:, 1], 
-                levels=5, fill=True, gridsize=30, cut=0, thresh=0.1
-            )
-          except Exception as e:
-            print(e)
+          v = distr2image(gmm).numpy()
+          msk = np.where(0 < v)
+          plt.scatter(
+              grid[msk, 0], grid[msk, 1],
+              c=v[msk],
+              # vmax=5., vmin=0.,
+              cmap='jet'
+          )
   
           mu = pred['gmm']['mu'][ind].numpy()
           alpha = pred['gmm']['alpha'][ind].numpy()
@@ -110,6 +121,14 @@ with imageio.get_writer('movie.avi', mode='I') as writer:
               'o', markersize=1, color='blue', alpha=a
             )
           ###############
+          if 'D mu' in pred:
+            mu = pred['D mu'][ind].numpy()
+            for m in mu:
+              plt.plot(
+                m[0], m[1], 
+                'o', markersize=3, color='magenta'
+              )
+          ###############
           for i in range(5):
               d = i * 0.1
               plt.gca().add_patch(
@@ -119,21 +138,21 @@ with imageio.get_writer('movie.avi', mode='I') as writer:
                 )
               )
           
-          plt.subplots_adjust(bottom=0.25, top=.95)
-          ax = plt.gca().inset_axes([0, -.3, .3, 0.3])
-          ax.axis('off')
-          ax.imshow(X[1][ind, -1], 'gray', interpolation='nearest')
+        #   plt.subplots_adjust(bottom=0.25, top=.95)
+        #   ax = plt.gca().inset_axes([0, -.3, .3, 0.3])
+        #   ax.axis('off')
+        #   ax.imshow(X[1][ind, -1], 'gray', interpolation='nearest')
   
-          ax = plt.gca().inset_axes([0.7, -.3, .3, 0.3])
-          ax.axis('off')
-          ax.imshow(X[2][ind, -1], 'gray', interpolation='nearest')
+        #   ax = plt.gca().inset_axes([0.7, -.3, .3, 0.3])
+        #   ax.axis('off')
+        #   ax.imshow(X[2][ind, -1], 'gray', interpolation='nearest')
   
-          ax = plt.gca().inset_axes([0.33, -.3, .3, 0.3])
-          ax.axis('off')
-          pts = X[0][ind, -1]
-          ax.plot(pts[None, :, 0], 1 - pts[None, :, 1], 'o', markersize=1)
-          ax.set_xlim([0, 1])
-          ax.set_ylim([0, 1])
+        #   ax = plt.gca().inset_axes([0.33, -.3, .3, 0.3])
+        #   ax.axis('off')
+        #   pts = X[0][ind, -1]
+        #   ax.plot(pts[None, :, 0], 1 - pts[None, :, 1], 'o', markersize=1)
+        #   ax.set_xlim([0, 1])
+        #   ax.set_ylim([0, 1])
           
           # plt.axis('equal')
           plt.axis([-0.1, 1.1, -0.1, 1.1])
@@ -142,7 +161,7 @@ with imageio.get_writer('movie.avi', mode='I') as writer:
           image = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype='uint8')
           writer.append_data(image.reshape(nrows, ncols, 3))
         except Exception as e:
-          print(e)
+          raise(e)
         plt.clf()
         frame += 1
         continue

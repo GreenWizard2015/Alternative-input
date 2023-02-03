@@ -1,5 +1,5 @@
 import threading
-import Utils
+import Core.Utils as Utils
 import numpy as np
 from collections import defaultdict
 import os
@@ -14,7 +14,6 @@ class CDataset:
       CSamplesStorage(),
       defaults=dict(
         timesteps=timesteps,
-        return_tensors=True,
         stepsSampling={'max frames': 2, 'include last': True},
         # augmentations 
         pointsDropout=0.25, pointsNoise=0.002,
@@ -45,9 +44,9 @@ class CDataset:
       self._saveSamples()
     return
 
-  def store(self, data, goal, T):
+  def store(self, data, goal):
     data = Utils.tracked2sample(data)
-    sample = {**data, 'goal': goal, 'time': T}
+    sample = {**data, 'goal': goal}
     with self._lock:
       self._samples.add(sample)
       
