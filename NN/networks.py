@@ -151,7 +151,7 @@ def Step2LatentModel(latentSize, contextSize):
     temporal = CMyTransformerLayer(
       latentSize,
       toQuery=sMLP(sizes=[64, ], activation='relu'),
-      toKey=sMLP(sizes=[64, ], activation='relu')
+      toKey=sMLP(sizes=[64, ], activation='relu'),
       useNormalization=True
     )(temporal) + temporal
     intermediate.append(temporal)
