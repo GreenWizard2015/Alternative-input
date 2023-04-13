@@ -64,11 +64,11 @@ def eyeEncoderConv(shape):
   res = L.Dropout(0.1)(res)
   features = []
   for sz in [64, 64, 64, 64]:
+    res = L.Conv2D(sz, 3, strides=2, padding='same', activation='relu')(res)
     res = CConvPE(channels=3, activation='relu')(res)
     for _ in range(1):
       res = L.Conv2D(sz, 3, padding='same', activation='relu')(res)
 
-    res = L.MaxPooling2D()(res)
     features.append(
       L.Conv2D(1, 3, padding='same', activation='relu')(
         L.Dropout(0.1)(res)
@@ -76,9 +76,8 @@ def eyeEncoderConv(shape):
     )
     continue
   
-  features = L.Concatenate(-1)([L.Flatten()(x) for x in features])
-  res = features
-
+  res = L.Concatenate(-1)([L.Flatten()(x) for x in features])
+  res = L.Dense(256, activation='relu')(res)
   return tf.keras.Model(
     inputs=[eye],
     outputs=[res],

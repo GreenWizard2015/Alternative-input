@@ -45,28 +45,30 @@ class CEyeTracker:
       pass
 
     res = {
+      # main data
       'time': time.time(),
-      'raw': frame,
-      'size': frame.shape[:2],
       'face points': facePoints,
       'right eye': self._extract(image, RE),
-      'right eye visible': 5 < len(RE),
       'left eye': self._extract(image, LE),
-      'left eye visible': 5 < len(LE),
-      'lips distance': lipsDistancePx
+      # misc
+      'lips distance': lipsDistancePx,
+      'raw': frame,
     }
     return res
   
   def _extract(self, image, pts):
     sz = (32, 32)
+    padding = 5
     if len(pts) < 5:
       return np.zeros((*sz, image.shape[-1]), image.dtype)
     
     XY = np.array(pts)
-    crop = image[
-      XY[:, 1].min()-5:XY[:, 1].max()+5,
-      XY[:, 0].min()-5:XY[:, 0].max()+5,
-    ]
+
+    A = (XY.min(axis=0) - padding).clip(min=0)
+    B = XY.max(axis=0) + padding
+    B = np.minimum(B, image.shape[:2][::-1])
+    
+    crop = image[ A[1]:B[1], A[0]:B[0], ]
     if np.min(crop.shape[:2]) < 8:
       return np.zeros((*sz, image.shape[-1]), image.dtype)
     return cv2.resize(crop, sz)

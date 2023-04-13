@@ -86,7 +86,7 @@ class CTreeDecoder(L.Layer):
     weights = weights[..., 0]
 
     # for debugging, find the max weight and print unique values
-    if True:
+    if False:
       maxWeight = tf.reduce_max(weights, axis=-1)
       maxInd = tf.argmax(weights, axis=-1)
       uniqueInd, _ = tf.unique(maxInd)
@@ -115,14 +115,35 @@ class CTreeDecoder(L.Layer):
       tf.nn.softmax(weightsG, axis=-1)
     )
 
-def _GMModel(FACE_LATENT_SIZE):
+class CSimpleDecoder(L.Layer):
+  def __init__(self, NGaussians, **kwargs):
+    super().__init__(**kwargs)
+    self._NGaussians = NGaussians
+    self._rawG = CParallelDense(2 + 3 + 1, self._NGaussians)
+    return
+
+  def call(self, latent, training=None):
+    raw = self._rawG(latent, training=training)
+    raw = tf.reshape(raw, (-1, self._NGaussians, 2 + 3 + 1))
+    mu, scaleRaw, weightsG = tf.split(raw, [2, 3, 1], axis=-1)
+    weightsG = tf.nn.leaky_relu(weightsG[..., 0], alpha=0.2)
+    return(
+      0.5 + mu,
+      tfp.math.fill_triangular(tf.exp(scaleRaw) + 1e-8),
+      tf.nn.softmax(weightsG, axis=-1)
+    )
+
+def _GMModel(FACE_LATENT_SIZE, NGaussians=8):
   latentFace = L.Input((FACE_LATENT_SIZE, ))
 
   latent = sMLP(sizes=[256, ] * 5, activation='relu')(latentFace)
 
-  NodesPerLayer = 3
-  TreeLevels = 4
-  mu, scale_tril, weights = CTreeDecoder(NodesPerLayer, TreeLevels, hard=False)(latent)
+  # mu, scale_tril, weights = CTreeDecoder(
+  #   NodesPerLayer=3,
+  #   TreeLevels=3,
+  #   hard=True, NGaussians=NGaussians
+  # )(latent)
+  mu, scale_tril, weights = CSimpleDecoder(NGaussians=NGaussians)(latent)
   
   return tf.keras.Model(
     inputs=[latentFace],

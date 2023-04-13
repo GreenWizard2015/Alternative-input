@@ -27,23 +27,30 @@ trainDataset = CDatasetLoader(
       stepsSampling={'max frames': 5, 'include last': False},
       # augmentations
       pointsDropout=0.2, pointsNoise=0.005,
-      eyesDropout=0., eyesAdditiveNoise=0.05, brightnessFactor=2., lightBlobFactor=2.,
+      eyesDropout=0., eyesAdditiveNoise=0.01, brightnessFactor=1.3, lightBlobFactor=1.3,
       shiftsN=SHIFT_AUGMENTATION,
       radialShiftsN=SHIFT_AUGMENTATION,
     ),
   )
 )
 
-trainContexts = trainDataset.contexts + [SHIFT_AUGMENTATION, SHIFT_AUGMENTATION]
+SHIFT_AUGMENTATIONS_N = 2 * 1
+trainContexts = trainDataset.contexts + [SHIFT_AUGMENTATION] * SHIFT_AUGMENTATIONS_N
 print('Train contexts:', trainContexts)
 
 pretrainDataset = CPretrainLoader(
   os.path.join(folder, 'pretrain.npz'),
-  batch_size=16,
+  batch_size=64,
   contextsStartIndex=trainContexts,
+  fixedContexts=[0] * len(trainContexts),
 )
-testDataset = CTestLoader(os.path.join(folder, 'test'), contextsStartIndex=trainContexts)
-testContexts = [2, 2, 3] + [2, 2] # testDataset.contexts
+testDataset = CTestLoader(
+  os.path.join(folder, 'test'), 
+  contextsStartIndex=trainContexts,
+  fixedContexts=[0] * len(trainContexts),
+)
+# testContexts = [2, 2, 3] + [1,] * SHIFT_AUGMENTATIONS_N # testDataset.contexts
+testContexts = [1,1,1] + [1,] * SHIFT_AUGMENTATIONS_N # testDataset.contexts
 
 print('Test contexts:', testContexts)
 contextsAll = [a + b for a, b in zip(trainContexts, testContexts)]
@@ -51,10 +58,19 @@ print('All contexts:', contextsAll)
 
 model = CGMModel(
   F2LArgs=dict(steps=5, contexts=contextsAll),
-  # weights=dict(folder=folder), 
+#   weights=dict(folder=folder), 
   trainable=True,
   useDiscriminator=False,
 )
+
+def injectNoise(sigma=0.01):
+  return
+  for field in ['_face2latent', '_latent2face']:
+    for v in getattr(model, field).trainable_variables:
+      v.assign_add(tf.random.normal(v.shape, stddev=sigma))
+      continue
+    continue
+  return
 
 def evaluate():
   T = time.time()
@@ -149,11 +165,12 @@ def evaluate():
   print('Test | %.2f sec | Loss: %.5f. Distance: %.5f' % (time.time() - T, loss, np.mean(predDist)))
   return loss
 
+injectNoise(0.01)
 bestLoss = evaluate() # np.inf
 # bestLoss = np.inf
 for epoch in range(10):
   timesteps = 5
-  batchSize = 64
+  batchSize = 8*8
   print('Epoch: %d, timesteps: %d, batchSize: %d' % (epoch, timesteps, batchSize))
   print('lr: %.2e' % (model.learning_rate,))
   history = defaultdict(list)
@@ -184,6 +201,7 @@ for epoch in range(10):
         bestLoss = testLoss
         model.save(folder)
       T = time.time()
+      injectNoise(0.01)
       pass
     continue
   

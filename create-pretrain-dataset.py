@@ -17,7 +17,9 @@ PARAMS = dict(
   maxT=1.0,
   # augmentations
   pointsDropout=0.1, pointsNoise=0.001,
-  eyesDropout=0., eyesAdditiveNoise=0.005, brightnessFactor=1.5, lightBlobFactor=1.5,
+  eyesDropout=0., eyesAdditiveNoise=0.01, brightnessFactor=1.1, lightBlobFactor=1.1,
+  shiftsN=1,
+  radialShiftsN=1,
 )
 
 folder = os.path.dirname(__file__)
@@ -47,7 +49,7 @@ def samplesStream():
       N = min(len(y), samplesN)
       samplesN -= N
       for idx in range(N):
-        for kind in ['augmented']:
+        for kind in ['clean']: #['augmented']:
           res = {k: v[idx, None].numpy() for k, v in x[kind].items()}
           res['y'] = y[idx, None]
           yield res

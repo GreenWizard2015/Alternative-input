@@ -3,10 +3,20 @@ import numpy as np
 import os
 
 class CPretrainLoader(tf.keras.utils.Sequence):
-  def __init__(self, filename, contextsStartIndex, batch_size):
+  def __init__(self, filename, contextsStartIndex, batch_size, fixedContexts=None):
     self._batchSize = batch_size
     with np.load(filename) as res:
       self._data = {k: v for k, v in res.items()}
+
+    if fixedContexts is not None:
+      oldShape = self._data['ContextID'].shape
+      fixedContexts = np.array(fixedContexts, dtype=self._data['ContextID'].dtype)
+      L = len(fixedContexts)
+      assert L <= oldShape[-1]
+      # replace inplace ContextID with fixedContexts by broadcasting
+      self._data['ContextID'][..., -L:] = fixedContexts
+      assert self._data['ContextID'].shape == oldShape
+      pass
     
     lastDim = self._data['ContextID'].shape[-1]
     dims = len(self._data['ContextID'].shape)

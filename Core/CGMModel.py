@@ -105,6 +105,11 @@ class CGMModel:
       for sourceId in ['augmented']: # ['clean', 'augmented']
         latents = self._face2latent(x[sourceId], training=True)
         extra += sum(map(tf.reduce_mean, self._face2latent.losses))
+
+        for i, x in enumerate(latents['intermediate']):
+          x = tf.reshape(x, (B * N, 2))
+          tf.assert_equal(tf.shape(x), tf.shape(mainPt))
+          losses[f'i-{i}'].append(tf.losses.mse(mainPt, x))
         ###########################
         latent = latents['latent']
         latent = tf.reshape(latent, (B * N, tf.shape(latent)[-1]))
@@ -128,9 +133,9 @@ class CGMModel:
         extra += sum(map(tf.reduce_mean, self._latent2GMM.losses))
         distrDetached = self._latent2GMM.distribution(distrRaw, nograds=True)
         ################################## 
-        # losses['GMM mean'].append(tf.losses.mae(mainPt, distr.mean()))
+        losses['GMM mean'].append(tf.losses.mse(mainPt, distr.mean()))
         # maximize distr.log_prob(mainPt)
-        realL = tf.nn.sigmoid(-distr.log_prob(mainPt))
+        realL = -distr.log_prob(mainPt)
         tf.debugging.assert_all_finite(realL, 'realL')
         tf.assert_equal(tf.shape(realL), (B * N,))
         realL = tf.reduce_mean(realL)
@@ -378,6 +383,11 @@ class CGMModel:
   
     latents = self._face2latent(x, training=False)
     extra += sum(map(tf.reduce_mean, self._face2latent.losses))
+    
+    for i, x in enumerate(latents['intermediate']):
+      x = tf.reshape(x, (B * N, 2))
+      tf.assert_equal(tf.shape(x), tf.shape(mainPt))
+      losses[f'intermediate{i}'].append(tf.losses.mse(mainPt, x))
     ###########################
     latent = latents['latent']
     latent = tf.reshape(latent, (B * N, tf.shape(latent)[-1]))
@@ -390,9 +400,9 @@ class CGMModel:
     extra += sum(map(tf.reduce_mean, self._latent2GMM.losses))
     distrDetached = self._latent2GMM.distribution(distrRaw, nograds=True)
     ################################## 
-    # losses['GMM mean'].append(tf.losses.mae(mainPt, distr.mean()))
+    losses['GMM mean'].append(tf.losses.mse(mainPt, distr.mean()))
     # maximize distr.log_prob(mainPt)
-    realL = tf.nn.sigmoid(-distr.log_prob(mainPt))
+    realL = -distr.log_prob(mainPt)
     tf.debugging.assert_all_finite(realL, 'realL')
     tf.assert_equal(tf.shape(realL), (B * N,))
     realL = tf.reduce_mean(realL)

@@ -258,31 +258,33 @@ class CDataSampler:
   
   @lru_cache(None)
   def _getShifts(self, N):
-    shifts = [(0.0, 0.0)]
-    while len(shifts) < N:
-      # add random shift noprm
-      shifts.append( np.random.normal(0.0, 0.3, size=2) )
-      continue
-    shifts = np.array(shifts, np.float32)
+    def spiral(n, R, turns):
+        steps = np.linspace(0, 1, n)
+        steps = np.cumsum(steps) / steps.sum()
+        steps = (steps.max() - steps)[::-1]
+        theta = (turns * 2 * np.pi) * steps
+        r = R * theta / theta.max()
+        x = r * np.cos(theta)
+        y = r * np.sin(theta)
+        return np.stack([x, y], axis=1)
+
+    shifts = spiral(N, 0.3, 10)
     assert shifts.shape == (N, 2)
-    return shifts
+    # replace first point with zero
+    shifts[0, :] = 0.0
+    return shifts.astype(np.float32)
 
   @lru_cache(None)
   def _getRadialShifts(self, N):
-    shifts = [(1.0, 1.0)]
-    while len(shifts) < N:
-      # add random shift noprm
-      v = np.random.normal(1.0, 0.3, size=2)
-      v = np.clip(v, 0.5, 1.5)
-      shifts.append( v )
-      continue
-    shifts = np.array(shifts, np.float32)
+    shifts = np.linspace(0.8, 1.2, N - 1, dtype=np.float32)
+    shifts = np.insert(shifts, 0, 1.0)
+    shifts = np.stack([shifts, shifts], axis=-1)
     assert shifts.shape == (N, 2)
-    return shifts
+    # replace first point with one
+    shifts[0, :] = 1.0
+    return shifts.astype(np.float32)
 
-  def _augmentByShifts(self, Y, contextID, N, timesteps):
-    # reshape contextID so that it would be easier to augment it with shifts
-    contextID = contextID.reshape((-1, timesteps, contextID.shape[-1]))
+  def _augmentByShifts(self, Y, contextID, N):
     if 0 < N:
       shifts = self._getShifts(N)
       idx = np.random.randint(0, N, size=len(contextID))
@@ -303,13 +305,9 @@ class CDataSampler:
 
     assert augID.shape == (*contextID.shape[:-1], 1)
     contextID = np.concatenate([contextID, augID], axis=-1)
-    # flatten contextID
-    contextID = contextID.reshape((-1, contextID.shape[-1]))
     return Y, contextID
 
-  def _augmentByRadialShifts(self, Y, contextID, N, timesteps):
-    # reshape contextID so that it would be easier to augment it with shifts
-    contextID = contextID.reshape((-1, timesteps, contextID.shape[-1]))
+  def _augmentByRadialScale(self, Y, contextID, N):
     if 0 < N:
       shifts = self._getRadialShifts(N)
       idx = np.random.randint(0, N, size=len(contextID))
@@ -331,8 +329,6 @@ class CDataSampler:
 
     assert augID.shape == (*contextID.shape[:-1], 1)
     contextID = np.concatenate([contextID, augID], axis=-1)
-    # flatten contextID
-    contextID = contextID.reshape((-1, contextID.shape[-1]))
     return Y, contextID
 
   def _indexes2XY(self, indexesAndTime, kwargs):
@@ -350,15 +346,22 @@ class CDataSampler:
     ##############
     contextID = np.array([x['ContextID'] for x in samples], np.int32)
 
-    # augment Y by adding some delta
-    shiftsN = kwargs.get('shiftsN', -1)
-    if not(shiftsN is None):
-      Y, contextID = self._augmentByShifts(Y, contextID, shiftsN, timesteps)
+    # reshape contextID so that it would be easier to augment it
+    contextID = contextID.reshape((-1, timesteps, contextID.shape[-1]))
+    for _ in range(1):
+      # augment Y by adding some delta
+      shiftsN = kwargs.get('shiftsN', -1)
+      if not(shiftsN is None):
+        Y, contextID = self._augmentByShifts(Y, contextID, shiftsN)
 
-    # augment Y by radial shifts
-    radialShiftsN = kwargs.get('radialShiftsN', -1)
-    if not(radialShiftsN is None):
-      Y, contextID = self._augmentByRadialShifts(Y, contextID, radialShiftsN, timesteps)
+      # augment Y by radial scale
+      radialShiftsN = kwargs.get('radialShiftsN', -1)
+      if not(radialShiftsN is None):
+        Y, contextID = self._augmentByRadialScale(Y, contextID, radialShiftsN)
+      continue
+      
+    # flatten contextID
+    contextID = contextID.reshape((-1, contextID.shape[-1]))
       
     # shift contextID if needed
     contextShift = kwargs.get('contextShift', None)
@@ -391,7 +394,8 @@ class CDataSampler:
       )
     )
     ###############
-    return(X, Y)
+    (Y, ) = Y
+    return(X, (Y.astype(np.float32), ))
   
   @property
   def mainSeedsCount(self):
@@ -423,6 +427,13 @@ if __name__ == '__main__':
   from Core.CSamplesStorage import CSamplesStorage
   folder = os.path.dirname(os.path.dirname(__file__))
   ds = CDataSampler( CSamplesStorage() )
+
+  import matplotlib.pyplot as plt
+  data = ds._getShifts(512)
+  plt.scatter(data[:, 0], data[:, 1], .3)
+  plt.axis('equal')
+  plt.show()
+  exit(0)
   dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
 
   # blankLeft = np.all(dsBlock['left eye'] < 0.1*255, axis=(1, 2))

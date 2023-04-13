@@ -92,12 +92,12 @@ class CGate(tf.keras.layers.Layer):
     return tf.nn.tanh(self._gate) * x
 ############################################
 class CDecodePoint(tf.keras.layers.Layer):
-  def __init__(self, N, activation='linear', **kwargs):
+  def __init__(self, N, activation='linear', base=2.0, P=None, **kwargs):
     super().__init__(**kwargs)
     self._dense = L.Dense(2 * N, activation=activation)
     
-    P = -1.0 * np.arange(N)
-    self._decode = CDecodeSeries(base=2.0, powers=P)
+    P = -1.0 * np.arange(N) if P is None else P
+    self._decode = CDecodeSeries(base=base, powers=P)
     return
   
   def call(self, x):
