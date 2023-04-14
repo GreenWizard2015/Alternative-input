@@ -1,13 +1,14 @@
 import tensorflow as tf
 import math
 
+# Learnable encoding of coordinates
 class CCoordsEncodingLayer(tf.keras.layers.Layer):
   def __init__(self, 
     N, raw=True, useShifts=False,
     scaling='pow', # 'pow' or 'linear'
     maxFrequency=1e+4,
     useLowBands=True, useHighBands=True,
-    finalDropout=0.1, bandsDropout=True,
+    finalDropout=0.0, bandsDropout=False,
     sharedTransformation=False,
     **kwargs
   ):
@@ -25,7 +26,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     else:
       self._shifts = tf.constant(0.0, dtype=tf.float32)
 
-    maxN = 1 + (N // 2 if useHighBands and useLowBands else N)
+    maxN = 1 + N // 2 if useHighBands and useLowBands else N
     freq = self._createBands(scaling, maxFrequency, maxN)
     bands = []
     if useLowBands: bands.append(1.0 / freq[::-1])
@@ -70,12 +71,10 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     )
     return
 
-  #@tf.function
   def _fussion(self, x):
     res = tf.reduce_sum(x * self._fussionW, axis=-1) + self._fussionB
     return res
   
-  #@tf.function
   def _transform(self, x):
     B, M, P, N = tf.shape(x)[0], x.shape[1], x.shape[2], self._N
     data = []
@@ -94,7 +93,6 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     tf.assert_equal(tf.shape(res)[:-1], (B, M, N, P))
     return tf.reshape(res, (B, M, N, res.shape[-1] * P))
   
-  #@tf.function
   def call(self, x, training=None):
     # x is (B, M, P)
     # output is (B, M, N)
@@ -122,20 +120,6 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
   def gates(self):
     return tf.nn.tanh(self._gates)
   
-  def debug(self):
-    print(self.name)
-    W = tf.reshape(self.gates, -1).numpy()
-    freq = tf.reshape(self.coefs, -1).numpy()
-    binded = [(a, b) for a, b in zip(freq, W)]
-    binded = sorted(binded, key=lambda x: math.fabs(x[1]), reverse=True)
-
-    print('Main: ', ', '.join(['%.4f (%.4f)' % (a, b) for a, b in binded[:5]]))
-    secondaryLow = math.fabs(binded[5][1]) * 0.25
-    print('Secondary: ', ', '.join(['%.4f' % (a,) for a, b in binded[5:] if secondaryLow < math.fabs(b)]))
-    print('Dead: ', ', '.join(['%.4f' % (a,) for a, b in binded[5:] if math.fabs(b) < secondaryLow]))
-    print('..........')
-    return
-  
   def _bandsDropoutMake(self, maxRate):
     def apply(x):   
       normed = tf.abs(self.gates)
@@ -146,11 +130,10 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       mask = tf.cast(normed < noise, x.dtype) / (1.0 - normed)
       return x * tf.stop_gradient(mask)
     
-    #@tf.function
     def F(x, training):
-      if training:
-        return apply(x)
-      return x
+      training = tf.keras.backend.learning_phase()
+      training = tf.cast(training, tf.bool)
+      return tf.cond(training, lambda: apply(x), lambda: tf.identity(x))
     return F
   
   def _createBands(self, scaling, maxFrequency, N):
@@ -164,3 +147,4 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       maxFrequency = N if maxFrequency is None else maxFrequency
       return tf.linspace(1.0, float(maxFrequency), N)
     return
+

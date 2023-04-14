@@ -216,11 +216,16 @@ class CQuantizeLayer(tf.keras.layers.Layer):
 ####################################
 # causal self-attention transformer
 class CMyTransformerLayer(tf.keras.layers.Layer):
-  def __init__(self, latentSize, toQuery=None, toKey=None, useNormalization=False, **kwargs):
+  def __init__(self,
+    latentSize, num_heads=8,
+    toQuery=None, toKey=None,
+    useNormalization=False, 
+    **kwargs
+  ):
     super().__init__(**kwargs)
     self._layerNorm = tf.keras.layers.LayerNormalization() if useNormalization else lambda x: x
     self._mha = tf.keras.layers.MultiHeadAttention(
-      num_heads=32, dropout=0.01, key_dim=latentSize
+      num_heads=num_heads, dropout=0.01, key_dim=latentSize
     )
     self._toQuery = toQuery if toQuery is not None else lambda x: x
     self._toKey = toKey if toKey is not None else lambda x: x
