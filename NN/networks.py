@@ -112,25 +112,30 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
   eyeR = L.Input((None, eyeSize, eyeSize, 1))
   context = L.Input((None, contextSize))
 
-  encodedL, encodedR = CRolloutTimesteps(eyeEncoder(), name='Eyes')([eyeL, eyeR, context])
-  encodedP = CRolloutTimesteps(FaceMeshEncoder(), name='FaceMesh')([points, context])
+  encodedL, encodedR = CRolloutTimesteps(
+    eyeEncoder(latentSize=latentSize), name='Eyes'
+  )([eyeL, eyeR, context])
+  encodedP = CRolloutTimesteps(
+    FaceMeshEncoder(latentSize), name='FaceMesh'
+  )([points, context])
 
   combined = L.Concatenate(-1)([encodedP, encodedL, encodedR, context])
   combined = sMLP(sizes=[256, latentSize], activation='relu')(combined)
   
+  inputs = {
+    'points': points,
+    'left eye': eyeL,
+    'right eye': eyeR,
+    'context': context,
+  }
+  
+  IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
+  # IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   return tf.keras.Model(
-    inputs={
-      'points': points,
-      'left eye': eyeL,
-      'right eye': eyeR,
-      'context': context
-    },
+    inputs=inputs,
     outputs={
       'latent': combined,
-      'intermediate': [
-        IntermediatePredictor()(x)
-        for x in [encodedP, encodedL, encodedR, combined]
-      ]
+      'intermediate': [IP(x) for x in [encodedP, encodedL, encodedR, combined]],
     }
   )
 
@@ -149,14 +154,15 @@ def Step2LatentModel(latentSize, contextSize):
   intermediate.append(temporal)
   for i in range(3):
     temporal = CMyTransformerLayer(
-      latentSize,
-      toQuery=sMLP(sizes=[64, ], activation='relu'),
-      toKey=sMLP(sizes=[64, ], activation='relu'),
+      latentSize, 8,
+      # toQuery=sMLP(sizes=[64, ], activation='relu'),
+      # toKey=sMLP(sizes=[64, ], activation='relu'),
       useNormalization=True
-    )(temporal) + temporal
+    )(temporal)
     intermediate.append(temporal)
     continue
   temporal = sMLP(sizes=[latentSize, latentSize], activation='relu')(temporal)
+  intermediate.append(temporal)
   temporal = stepsData + CGate(axis=[-1])(temporal)
   
   msk = L.Dense(latentSize, activation='tanh', use_bias=False)(context)
@@ -164,15 +170,14 @@ def Step2LatentModel(latentSize, contextSize):
     sMLP(sizes=[latentSize, latentSize], activation='relu')
   )(stepsData * msk, temporal * msk)
   
+  IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
+  # IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   return tf.keras.Model(
     inputs=[stepsDataInput, T, context],
     outputs={
       'latent': full,
       'partial': partial,
-      'intermediate': [
-        IntermediatePredictor()(x)
-        for x in [partial, full] + intermediate
-      ]
+      'intermediate': [IP(x) for x in [partial, full] + intermediate]
     }
   )
 
@@ -180,10 +185,17 @@ def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, context
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
   eyeR = L.Input((steps, eyeSize, eyeSize, 1))
-  ContextID = L.Input((steps, len(contexts)))
   T = L.Input((steps, 1))
-  
-  ctx = CContextEncoder(dims=32, contexts=contexts)(ContextID)
+  if not(contexts is None):
+    ContextID = L.Input((steps, len(contexts)))
+    ctx = CContextEncoder(dims=32, contexts=contexts)(ContextID)
+  else:
+    # make a dummy context ID
+    ctx = L.Lambda(
+      lambda x: tf.zeros([tf.shape(x)[0], tf.shape(x)[1], 1], tf.float32)
+    )(points)
+    pass
+
   ctxSize = ctx.shape[-1]
   Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, ctxSize)
   Step2Latent = Step2LatentModel(latentSize, ctxSize)
@@ -196,23 +208,28 @@ def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, context
   })
   
   res = Step2Latent([stepsData['latent'], T, ctx])
-  res['shift'] = L.Dense(2)(
-    sMLP(sizes=[32,]*4, activation='relu')(ctx)
-  )
   res['context'] = ctx
   res['intermediate'] = stepsData['intermediate'] + res['intermediate']
-  
-  main = tf.keras.Model(
-    inputs={
-      'points': points,
-      'left eye': eyeL,
-      'right eye': eyeR,
-      'ContextID': ContextID,
-      'time': T
-    },
-    outputs=res
-  )
 
+  inputs = {
+    'points': points,
+    'left eye': eyeL,
+    'right eye': eyeR,
+    'time': T
+  }
+
+  if contexts is None:
+    res['shift'] = L.Lambda(
+      lambda x: tf.zeros((tf.shape(x)[0], 2), tf.float32)
+    )(points)
+  else:
+    res['shift'] = L.Dense(2)(
+      sMLP(sizes=[32,]*4, activation='relu')(ctx)
+    )
+    inputs['ContextID'] = ContextID
+    pass
+
+  main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
     'main': main,
     'Face2Step': Face2Step,
@@ -232,8 +249,7 @@ def simpleModel(FACE_LATENT_SIZE=None):
   return tf.keras.Model(
     inputs=[latentFace, pos],
     outputs={
-      #'coords': .5 + CDecodePoint(16)(latent),
-      'coords': .5 + L.Dense(2)(latent),
+      'coords': .5 + CDecodePoint(16)(latent)
     }
   )
 
@@ -279,13 +295,9 @@ def ARModel(FACE_LATENT_SIZE=None, residualPos=False):
   )
 
 if __name__ == '__main__':
-  X = Face2LatentModel(steps=5)
-  X['main'].summary(expand_nested=True)
-  # print('-----------------')
-  # X['Face2Step'].summary()
-  # print('-----------------')
-  # X['Step2Latent'].summary()
-  # print('-----------------')
-#   simpleModel(64).summary()
-  model = X['main']  
+  X = Face2LatentModel(steps=5, latentSize=64, contexts=None)
+  X['main'].summary(expand_nested=False)
+  # X['Face2Step'].summary(expand_nested=False)
+  # X['Step2Latent'].summary(expand_nested=False)
+  # print(X['main'].outputs)
   pass

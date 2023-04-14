@@ -236,8 +236,8 @@ def modeB(folder):
   return
 
 def main():
-  folder = os.path.dirname(__file__, 'Data')
-  modeB(folder)
+  folder = os.path.join(os.path.dirname(__file__), 'Data')
+  modeA(folder)
   return
 
 if __name__ == '__main__':

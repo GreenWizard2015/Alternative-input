@@ -57,13 +57,13 @@ class CEyeEnricher(tf.keras.layers.Layer):
       (B, H, W, N * C)
     )
 ####################################
-def eyeEncoderConv(shape):
+def eyeEncoderConv(shape, name):
   eye = L.Input(shape)
   
   res = CEyeEnricher()(eye)
   res = L.Dropout(0.1)(res)
   features = []
-  for sz in [64, 64, 64, 64]:
+  for sz in [8, 16, 32, 64]:
     res = L.Conv2D(sz, 3, strides=2, padding='same', activation='relu')(res)
     res = CConvPE(channels=3, activation='relu')(res)
     for _ in range(1):
@@ -77,30 +77,43 @@ def eyeEncoderConv(shape):
     continue
   
   res = L.Concatenate(-1)([L.Flatten()(x) for x in features])
-  res = L.Dense(256, activation='relu')(res)
+  res = L.Dense(64, activation='relu')(res)
   return tf.keras.Model(
     inputs=[eye],
     outputs=[res],
-    name='eyeEncoderConv'
+    name=name
   )
 
-def eyeEncoder(shape=(32, 32, 1), latentSize=256):
-  eyeL = L.Input(shape)
-  eyeR = L.Input(shape)
-  context = L.Input((32,))
-  
-  encodedL, encodedR = CStackApplySplit(
-    eyeEncoderConv(shape) # shared encoder
-  )(eyeL, eyeR)
+class CEyeEncoder(tf.keras.Model):
+  def __init__(self, latent_size, **kwargs):
+    super().__init__(**kwargs)
+    self._latentSize = latent_size
+    self.out_mlp_L = sMLP(sizes=[self._latentSize] * 2, activation='relu', name='%s/out_mlp_L' % self.name)
+    self.out_mlp_R = sMLP(sizes=[self._latentSize] * 2, activation='relu', name='%s/out_mlp_R' % self.name)
+    self.ctx_mlp = sMLP(sizes=[64, 64], activation='relu', name='%s/ctx_mlp' % self.name)
+    return
 
-  ctx = sMLP(sizes=[64, 64], activation='relu')(context)
-  encodedL = L.Concatenate(-1)([encodedL, ctx])
-  encodedR = L.Concatenate(-1)([encodedR, ctx])
-  # NOT shared MLP
-  resL = sMLP(sizes=[256, latentSize], activation='relu')(encodedL)
-  resR = sMLP(sizes=[256, latentSize], activation='relu')(encodedR)
-  return tf.keras.Model(
-    inputs=[eyeL, eyeR, context],
-    outputs=[resL, resR],
-    name='eyeEncoder'
-  )
+  def build(self, input_shape):
+    eyeL_shape, eyeR_shape, context_shape = input_shape
+    # Define the shared encoder
+    self.encoder = CStackApplySplit(
+      eyeEncoderConv(eyeL_shape[1:], name='%s/eyeEncoderConv' % self.name),
+      name='%s/encoder' % self.name
+    )
+    self.encoder.build(eyeL_shape)
+    return super().build(input_shape)
+
+  def call(self, inputs):
+    eyeL, eyeR, context = inputs
+    # Encode the left and right eye inputs
+    encodedL, encodedR = self.encoder(eyeL, eyeR)
+
+    # Encode the context
+    ctx = self.ctx_mlp(context)
+    return [
+      self.out_mlp_L(tf.concat([encodedL, ctx], -1)),
+      self.out_mlp_R(tf.concat([encodedR, ctx], -1))
+    ]
+
+def eyeEncoder(shape=(32, 32, 1), latentSize=64):
+  return CEyeEncoder(latent_size=latentSize, name='eyeEncoder')
