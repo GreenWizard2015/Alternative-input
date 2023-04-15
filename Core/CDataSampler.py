@@ -19,13 +19,11 @@ class CDataSampler:
   def __len__(self):
     return len(self._storage)
   
-  def _hashesFor(self, goal, contextID):
+  def _hashesFor(self, goal):
     goal = np.array(goal) - 0.5 # centered
     x = np.trunc(goal * self._goalHashScale)
 
     res = [str(x)]
-    for id in contextID.reshape(-1):
-      res.append(id)
     return res
     
   def _bucketFor(self, *args, **kwargs):
@@ -49,7 +47,6 @@ class CDataSampler:
     sample = self._storage[idx]
     self._bucketFor(
       goal=sample['goal'],
-      contextID=sample['ContextID']
     ).append(idx)
     return idx
   
@@ -59,7 +56,6 @@ class CDataSampler:
       sample = self._storage[idx]
       self._bucketFor(
         goal=sample['goal'],
-        contextID=sample['ContextID']
       ).append(idx)
       continue
     return
@@ -157,6 +153,7 @@ class CDataSampler:
     T -= T[0]
     diff = np.diff(T, 1)
     idx = np.nonzero(diff)[0]
+    if len(idx) < 2: return False
     if len(diff) == len(idx):
       T = diff
     else:
@@ -169,9 +166,6 @@ class CDataSampler:
       pass
     T = np.insert(T, 0, 0.0)
     assert len(res) == len(T)
-    # assert same ContextID
-    ctx = self._storage[res[0]]['ContextID']
-    assert all([np.allclose(self._storage[ind]['ContextID'], ctx) for ind in res[1:]])
     return [tuple(x) for x in zip(res, T)]
   
   def _seedsStream(self, N):
@@ -255,81 +249,6 @@ class CDataSampler:
     if not past: before = []
     if not future: after = []
     return self._trajectory2keypoints(before, ind, after, N=keypoints)
-  
-  @lru_cache(None)
-  def _getShifts(self, N):
-    def spiral(n, R, turns):
-        steps = np.linspace(0, 1, n)
-        steps = np.cumsum(steps) / steps.sum()
-        steps = (steps.max() - steps)[::-1]
-        theta = (turns * 2 * np.pi) * steps
-        r = R * theta / theta.max()
-        x = r * np.cos(theta)
-        y = r * np.sin(theta)
-        return np.stack([x, y], axis=1)
-
-    shifts = spiral(N, 0.3, 10)
-    assert shifts.shape == (N, 2)
-    # replace first point with zero
-    shifts[0, :] = 0.0
-    return shifts.astype(np.float32)
-
-  @lru_cache(None)
-  def _getRadialShifts(self, N):
-    shifts = np.linspace(0.8, 1.2, N - 1, dtype=np.float32)
-    shifts = np.insert(shifts, 0, 1.0)
-    shifts = np.stack([shifts, shifts], axis=-1)
-    assert shifts.shape == (N, 2)
-    # replace first point with one
-    shifts[0, :] = 1.0
-    return shifts.astype(np.float32)
-
-  def _augmentByShifts(self, Y, contextID, N):
-    if 0 < N:
-      shifts = self._getShifts(N)
-      idx = np.random.randint(0, N, size=len(contextID))
-      shifts = shifts[idx, None, None, :]
-      Y = Y[0]
-      assert shifts.shape == (len(Y), 1, 1, 2)
-      assert len(Y) == len(shifts)
-      Y = (Y + shifts, )
-      
-      augID = np.empty((*contextID.shape[:-1], 1), contextID.dtype)
-      assert len(augID) == len(contextID)
-      augID[..., 0] = idx.reshape((-1, 1))
-    else:
-      # -1 => 0, -2 => 1, ...
-      idx = -1 - N
-      augID = contextID[..., idx, None]
-      pass
-
-    assert augID.shape == (*contextID.shape[:-1], 1)
-    contextID = np.concatenate([contextID, augID], axis=-1)
-    return Y, contextID
-
-  def _augmentByRadialScale(self, Y, contextID, N):
-    if 0 < N:
-      shifts = self._getRadialShifts(N)
-      idx = np.random.randint(0, N, size=len(contextID))
-      shifts = shifts[idx, None, None, :]
-      Y = Y[0]
-      assert shifts.shape == (len(Y), 1, 1, 2)
-      assert len(Y) == len(shifts)
-      Y = 0.5 + ((Y - 0.5) * shifts)
-      Y = (Y, )
-      
-      augID = np.empty((*contextID.shape[:-1], 1), contextID.dtype)
-      assert len(augID) == len(contextID)
-      augID[..., 0] = idx.reshape((-1, 1))
-    else:
-      # -1 => 0, -2 => 1, ...
-      idx = -1 - N
-      augID = contextID[..., idx, None]
-      pass
-
-    assert augID.shape == (*contextID.shape[:-1], 1)
-    contextID = np.concatenate([contextID, augID], axis=-1)
-    return Y, contextID
 
   def _indexes2XY(self, indexesAndTime, kwargs):
     timesteps = kwargs.get('timesteps', None)
@@ -344,41 +263,11 @@ class CDataSampler:
     ], np.float32), )
     Y = self._reshapeSteps(Y, timesteps)
     ##############
-    contextID = np.array([x['ContextID'] for x in samples], np.int32)
-
-    # reshape contextID so that it would be easier to augment it
-    contextID = contextID.reshape((-1, timesteps, contextID.shape[-1]))
-    for _ in range(1):
-      # augment Y by adding some delta
-      shiftsN = kwargs.get('shiftsN', -1)
-      if not(shiftsN is None):
-        Y, contextID = self._augmentByShifts(Y, contextID, shiftsN)
-
-      # augment Y by radial scale
-      radialShiftsN = kwargs.get('radialShiftsN', -1)
-      if not(radialShiftsN is None):
-        Y, contextID = self._augmentByRadialScale(Y, contextID, radialShiftsN)
-      continue
-      
-    # flatten contextID
-    contextID = contextID.reshape((-1, contextID.shape[-1]))
-      
-    # shift contextID if needed
-    contextShift = kwargs.get('contextShift', None)
-    if contextShift is not None:
-      if not isinstance(contextShift, int):
-        # contextShift is a list of shifts. Convert it to numpy array
-        contextShift = np.array(contextShift, np.int32).reshape((1, -1))
-        assert contextShift.shape == contextID[:1].shape, "contextShift"
-      contextID += contextShift
-      pass
-    ##############
     X = DSUtils.toTensor(
       (
         np.array([x['points'] for x in samples], np.float32),
         np.array([x['left eye'] for x in samples]),
         np.array([x['right eye'] for x in samples]),
-        contextID,
         np.array([T for _, T in indexesAndTime], np.float32).reshape((-1, 1)),
       ),
       (
@@ -413,9 +302,6 @@ class CDataSampler:
     F(self._samplesByHash)
     return LLBuckets
 
-  @property
-  def contexts(self):
-    return self._storage.contexts
 ##############
 if __name__ == '__main__':
   import tensorflow as tf
@@ -434,7 +320,6 @@ if __name__ == '__main__':
   plt.axis('equal')
   plt.show()
   exit(0)
-  dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
 
   # blankLeft = np.all(dsBlock['left eye'] < 0.1*255, axis=(1, 2))
   # blankRight = np.all(dsBlock['right eye'] < 0.1*255, axis=(1, 2))
@@ -443,6 +328,7 @@ if __name__ == '__main__':
   # both = np.logical_and(blankLeft, blankRight)
   # print('Both', both.sum())
   # exit(0)
+  dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
   ds.addBlock(dsBlock)
 
   xy = ds.sample(

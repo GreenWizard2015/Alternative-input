@@ -5,13 +5,10 @@ import pygame
 import pygame.locals as G
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
-from Core.CMIDataset import CMIDataset
 from Core.CLearnablePredictor import CLearnablePredictor
-import os
-from Core.CCoreModel import CCoreModel
-from Core.CGMModel import CGMModel
-import time
-from App.Utils import Colors, densityToSurface
+from Core.CDemoModel import CDemoModel
+import os, time
+from App.Utils import Colors
 import App.AppModes as AppModes
 from App.CRandomIllumination import CRandomIllumination
 
@@ -31,7 +28,6 @@ class App:
     self._currentMode = AppModes.APP_MODES[0](self)
     
     self._history = []
-    self._density = None
     self._illumination = CRandomIllumination()
     return
   
@@ -96,21 +92,11 @@ class App:
     if not(prediction is None):
       self._lastPrediction = prediction
       pred = prediction[0]
-      density = densityToSurface(pred['density'].numpy())
-      W, H = self.WH
-      density = pygame.transform.scale(density, (int(W), int(H)))
-      self._density = density
 
       self._history.append(pred['coords'])
       self._history = self._history[-15:]
-      # if not self._currentMode._paused:
-      #   self._dataset.store(
-      #     pred['latent'].numpy()[0],
-      #     pred['coords'],
-      #     self._currentMode._pos,
-      #     prediction[1]['pos']
-      #   )
-      
+      pass
+    #####################
     if self._lastPrediction:
       factor = 0.9
       pred = self._lastPrediction[0]
@@ -130,9 +116,6 @@ class App:
     clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
     window.fill(clr)
     
-    if not(self._density is None):
-      window.blit(self._density, (0, 0))
-
     self._illumination.on_render(window)
     self._currentMode.on_render(window)
     self._renderPredictions()
@@ -162,16 +145,8 @@ class App:
         self.drawObject(tuple(sp), R=5, color=Colors.BLACK)
 
         self.drawText(str(positions), (5, 5), Colors.BLACK)
-#         self.drawText(
-#           str(predicted['MI']),
-#           tuple(int(x) for x in sp), 
-#           color=Colors.RED
-#         )
         pass
       self.drawText(str(info), (5, 35), Colors.BLACK)
-      
-      sp = np.multiply(predicted['sampled'], wh).astype(np.int32)
-      self.drawObject(tuple(sp), R=3, color=Colors.BLUE)
       pass
     return
    
@@ -210,16 +185,9 @@ class App:
     pygame.draw.circle(self._display_surf, color, pos, R, 0)
     return
 
-def modeA(folder):    
-  gmm = CGMModel(
-    F2LArgs={'steps': 5},
-    weights={'folder': folder},
-    trainable=False
-  )
-  model = CCoreModel(gmm, trainable=not True, weights={'folder': folder})
-
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset, CMIDataset() as MID:
-    dataset = MID
+def modeA(folder):
+  model = CDemoModel(trainable=True, timesteps=5)
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset:
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
       app.run()

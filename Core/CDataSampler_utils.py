@@ -50,7 +50,6 @@ def addLightBlob(imgA, imgB, brightness, shared):
       tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
       tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
       tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
-      tf.TensorSpec(shape=(None, None), dtype=tf.int32),
       tf.TensorSpec(shape=(None, 1), dtype=tf.float32),
     ),
     tf.TensorSpec(shape=(7,), dtype=tf.float32),
@@ -65,7 +64,7 @@ def toTensor(data, params):
     timesteps
   ) = tf.unstack(params)
   timesteps = tf.cast(timesteps, tf.int32)
-  points, imgA, imgB, ContextID, T = data
+  points, imgA, imgB, T = data
   N = tf.shape(points)[0]
   imgA = tf.cast(imgA, tf.float32) / 255.
   imgB = tf.cast(imgB, tf.float32) / 255.
@@ -74,15 +73,11 @@ def toTensor(data, params):
     x,
     tf.concat([(N // timesteps, timesteps), tf.shape(x)[1:]], axis=-1)
   )
-  # assert that all timesteps share the same ContextID
-  ctx = reshape(ContextID)
-  tf.assert_equal(tf.reduce_min(ctx, axis=-2), tf.reduce_max(ctx, axis=-2))
   clean = {
     'time': reshape(T),
     'points': reshape(points),
     'left eye': reshape(imgA),
     'right eye': reshape(imgB),
-    'ContextID': reshape(ContextID),
   }
   ##########################
   def clip(x): return tf.clip_by_value(x, 0., 1.)
@@ -134,7 +129,6 @@ def toTensor(data, params):
       'points': reshape(points),
       'left eye': reshape(imgA),
       'right eye': reshape(imgB),
-      'ContextID': reshape(ContextID),
     },
     'clean': clean,
   }
