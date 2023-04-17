@@ -61,7 +61,6 @@ def eyeEncoderConv(shape, name):
   eye = L.Input(shape)
   
   res = CEyeEnricher()(eye)
-  res = L.Dropout(0.1)(res)
   features = []
   for sz in [8, 16, 32, 64]:
     res = L.Conv2D(sz, 3, strides=2, padding='same', activation='relu')(res)
@@ -71,7 +70,7 @@ def eyeEncoderConv(shape, name):
 
     features.append(
       L.Conv2D(1, 3, padding='same', activation='relu')(
-        L.Dropout(0.1)(res)
+        res
       )
     )
     continue

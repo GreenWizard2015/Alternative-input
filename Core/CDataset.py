@@ -20,7 +20,9 @@ class CDataset:
         eyesDropout=0.05, eyesAdditiveNoise=0.02,
       )
     )
-    self._samples.addBlock(Utils.datasetFrom(folder))
+    dataset = Utils.datasetFrom(folder)
+    if dataset is not None:
+      self._samples.addBlock(Utils.datasetFrom(folder))
     self._timesteps = timesteps
     
     self._totalSamples = 0

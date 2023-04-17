@@ -186,7 +186,7 @@ class App:
     return
 
 def modeA(folder):
-  model = CDemoModel(trainable=True, timesteps=5)
+  model = CDemoModel(trainable=not True, timesteps=5, weights=dict(folder=folder, postfix='latest'))
   with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset:
     with CLearnablePredictor(dataset, model=model) as predictor:
       app = App(tracker, dataset, predictor=predictor.async_infer)
@@ -196,8 +196,8 @@ def modeA(folder):
     pass
   return
 
-def modeB(folder):
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset-test'), 5) as dataset:
+def modeB(folder, datasetName='Dataset-test'):
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, datasetName), 5) as dataset:
     app = App(tracker, dataset, predictor=lambda *x: None)
     app.run()
     pass
@@ -206,6 +206,8 @@ def modeB(folder):
 def main():
   folder = os.path.join(os.path.dirname(__file__), 'Data')
   modeA(folder)
+  # modeB(folder, datasetName='Dataset')
+  # modeB(folder, datasetName='Dataset-test')
   return
 
 if __name__ == '__main__':

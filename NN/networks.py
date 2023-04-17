@@ -20,74 +20,6 @@ class CTimeEncoderLayer(tf.keras.layers.Layer):
   def call(self, T):
     T = self._encoder(T[..., None])
     return T[..., 0, :]
-  
-class CContextEncoder(tf.keras.layers.Layer):
-  def __init__(self, dims, contexts, **kwargs):
-    super().__init__(**kwargs)
-    self._dropoutRate = 0.1
-    self._dims = dims
-    self._embeddings = []
-    self._embeddingsDecoder = []
-    for i, N in enumerate(contexts):
-      # last 2 are for augmentations id
-      isAugmented = (len(contexts) - 2) <= i
-      self._embeddings.append(tf.keras.layers.Embedding(
-        N, 
-        1 if isAugmented else dims,
-        name='%s/embeddings-%d' % (self.name, i)
-      ))
-
-      decoder = lambda x: x
-      if isAugmented: # 1 -> dims
-        decoder = tf.keras.Sequential([
-          # apply tanh to keep values in [-1, 1]
-          tf.keras.layers.Lambda(tf.math.tanh),
-          tf.keras.layers.Dense(dims, activation='relu'),
-          tf.keras.layers.Dense(dims, activation='relu'),
-        ], name='%s/decoder-%d' % (self.name, i))
-
-      self._embeddingsDecoder.append(decoder)
-      continue
-    
-    self._encoder = tf.keras.Sequential([
-      tf.keras.layers.Dropout(0.1),
-      tf.keras.layers.Dense(dims, activation='relu'),
-      tf.keras.layers.Dense(dims, activation='relu'),
-    ], name='%s/encoder' % self.name)
-    return
-
-  @property
-  def embeddings(self):
-    return self._embeddings
-  
-  def call(self, contextID, training=None):
-    B, N, C = [tf.shape(contextID)[i] for i in range(3)]
-    tf.assert_equal(C, len(self._embeddings))
-
-    embeddings = []
-    for i, emb in enumerate(self._embeddings):
-      emb = emb(contextID[..., i])
-      emb = self._embeddingsDecoder[i](emb)
-      shp = tf.shape(emb)
-      tf.assert_equal(shp, (B, N, shp[-1]))
-      embeddings.append(emb)
-      continue
-
-    # if training: # apply dropout in training mode
-    #   for i, emb in enumerate(embeddings):
-    #     # mask out each embedding with dropout rate
-    #     mask = tf.random.uniform((B, N, 1)) < self._dropoutRate
-    #     emb = tf.where(mask, 0.0, emb)
-    #     # mask out gradients
-    #     # embS = tf.stop_gradient(emb)
-    #     # mask = tf.random.uniform((B, N, 1)) < 0.1
-    #     # emb = tf.where(mask, embS, emb)
-    #     embeddings[i] = emb
-    #     continue
-    #   pass
-
-    embeddings = tf.concat(embeddings, axis=-1)
-    return self._encoder(embeddings)
 
 class IntermediatePredictor(tf.keras.layers.Layer):
   def build(self, input_shape):
@@ -102,8 +34,12 @@ class IntermediatePredictor(tf.keras.layers.Layer):
     return super().build(input_shape)
   
   def call(self, x):
+    B = tf.shape(x)[0]
+    N = tf.shape(x)[1]
     x = self._mlp(x)
-    return 0.5 + self._decodePoints(x)
+    x = self._decodePoints(x)
+    tf.assert_equal(tf.shape(x), (B, N, 2))
+    return x
 ################################################################
 
 def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
@@ -129,13 +65,13 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
     'context': context,
   }
   
-  IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
-  # IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
+  # IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
+  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   return tf.keras.Model(
     inputs=inputs,
     outputs={
       'latent': combined,
-      'intermediate': [IP(x) for x in [encodedP, encodedL, encodedR, combined]],
+      'intermediate': []#IP(x) for x in [encodedP, encodedL, encodedR, combined]],
     }
   )
 
@@ -151,33 +87,27 @@ def Step2LatentModel(latentSize, contextSize):
   temporal = sMLP(sizes=[latentSize, latentSize], activation='relu')(
     L.Concatenate(-1)([stepsData, encodedT, context])
   )
-  intermediate.append(temporal)
   for i in range(3):
     temporal = CMyTransformerLayer(
-      latentSize, 8,
-      # toQuery=sMLP(sizes=[64, ], activation='relu'),
-      # toKey=sMLP(sizes=[64, ], activation='relu'),
-      useNormalization=True
+      latentSize, 32,
+      # toQuery=sMLP(sizes=[64, latentSize], activation='relu'),
+      # toKey=sMLP(sizes=[64, latentSize], activation='relu'),
+      useNormalization=False
     )(temporal)
     intermediate.append(temporal)
     continue
-  temporal = sMLP(sizes=[latentSize, latentSize], activation='relu')(temporal)
-  intermediate.append(temporal)
-  temporal = stepsData + CGate(axis=[-1])(temporal)
   
-  msk = L.Dense(latentSize, activation='tanh', use_bias=False)(context)
-  partial, full = CStackApplySplit(
-    sMLP(sizes=[latentSize, latentSize], activation='relu')
-  )(stepsData * msk, temporal * msk)
-  
-  IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
-  # IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
+  latent = temporal
+#   IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
+  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
+  intermediate = [IP(x) for x in intermediate]
+  result = intermediate[-1] #sum(intermediate) / len(intermediate)
   return tf.keras.Model(
     inputs=[stepsDataInput, T, context],
     outputs={
-      'latent': full,
-      'partial': partial,
-      'intermediate': [IP(x) for x in [partial, full] + intermediate]
+      'latent': latent,
+      'intermediate': intermediate,
+      'result': result
     }
   )
 
