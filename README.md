@@ -14,7 +14,7 @@ It's a bit strange, but unfortunately, I have recorded a full [video](https://yo
 
 ## Neural network based solution
 
-This repository contains a solution based on neural networks for eye movement detection and gaze tracking. In the initial stages of development, I even provided screencasts to demonstrate the process. However, as the complexity grew, recording screencasts became problematic due to hardware limitations on my computer.
+This repository contains a solution based on neural networks for eye movement detection and gaze tracking. In the initial stages of development, I even provided [screencasts](https://www.youtube.com/playlist?list=PLRjmXqZTJnJUWnLDQGlNGBRW9_ICNuBRd) to demonstrate the development process. However, as the complexity grew, recording screencasts became problematic due to hardware limitations on my computer.
 
 Utilizing MediaPipe for face detection remains a crucial part of the project. However, now, the identified face mesh and, most importantly, images of both eyes are fed into the neural network. This approach significantly improves the user experience by allowing the neural network to detect eye movements, reducing the need for moving the entire head.
 
