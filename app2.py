@@ -3,14 +3,12 @@
 import numpy as np
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CLearnablePredictor import CLearnablePredictor
-from Core.CCoreModel import CCoreModel
 import os
 import time
 import pywinauto
 from pywinauto import win32functions, win32defines
 import keyboard
-import win32api, win32gui
-from Core.CGMModel import CGMModel
+from Core.CDemoModel import CDemoModel
 
 class App:
   def __init__(self, tracker, predictor):
@@ -48,7 +46,7 @@ class App:
       self._lastPrediction = prediction
     
     if self._lastPrediction:
-      factor = 0.9993
+      factor = 0.97
       pred = self._lastPrediction[0]
       predPos = pred['coords']
       self._smoothedPrediction = np.clip(
@@ -81,7 +79,7 @@ class App:
       ])
       while self._running:
         self.on_tick()
-        time.sleep(0.0)
+        time.sleep(0.01)
         continue
     finally:
       keyboard.unhook_all()
@@ -89,12 +87,8 @@ class App:
     
 def main():
   folder = os.path.dirname(__file__)
-  gmm = CGMModel(
-    F2LArgs={'steps': 5},
-    weights={'folder': folder},
-    trainable=False
-  )
-  model = CCoreModel(gmm, weights={'folder': folder}, trainable=False)
+  folder = os.path.join(folder, 'Data')
+  model = CDemoModel(timesteps=5, weights=dict(folder=folder, postfix='latest'), trainable=False)
    
   with CThreadedEyeTracker() as tracker:
     with CLearnablePredictor(dataset=None, model=model) as predictor:
@@ -104,3 +98,4 @@ def main():
 
 if __name__ == '__main__':
   main()
+ 

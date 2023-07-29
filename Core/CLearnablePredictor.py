@@ -70,7 +70,7 @@ class CLearnablePredictor:
 
     data = data[-1] # last step as current
     
-    res = self._model.extended(X) # , startPos=data['pos'][None])
+    res = self._model(X)
     info = dict(trainInfo)
     if not(self._dataset is None):
       info['samples'] = len(self._dataset)

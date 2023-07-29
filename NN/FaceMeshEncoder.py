@@ -3,13 +3,13 @@ from NN.Utils import sMLP
 from NN.CCoordsEncodingLayer import CCoordsEncodingLayer
 
 class FaceMeshEncoder(tf.keras.Model):
-  def __init__(self, **kwargs):
+  def __init__(self, latentSize, **kwargs):
     super().__init__(**kwargs)
     self._encodedPoints = CCoordsEncodingLayer(N=30, name='FaceMeshEncoder/coords')
-    self._sMLP = sMLP(sizes=[16, 8, 2], activation='relu', name='FaceMeshEncoder/sMLP-1')
+    self._sMLP = sMLP(sizes=[8, 2], activation='relu', name='FaceMeshEncoder/sMLP-1')
 
-    self._contextMLP = sMLP(sizes=[256, ], name='FaceMeshEncoder/contextMLP')
-    self._sMLP2 = sMLP(sizes=[256, ], name='FaceMeshEncoder/sMLP-2')
+    self._contextMLP = sMLP(sizes=[latentSize, latentSize], name='FaceMeshEncoder/contextMLP')
+    self._sMLP2 = sMLP(sizes=[latentSize, latentSize], name='FaceMeshEncoder/sMLP-2')
 
     self._flatten = tf.keras.layers.Flatten(name='FaceMeshEncoder/flatten')
     return

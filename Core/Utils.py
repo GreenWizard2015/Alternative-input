@@ -249,6 +249,9 @@ def datasetFrom(folder):
     res = {k: np.concatenate(v, axis=0) for k, v in dataset.items()}
     pass
 
+  # if empty dict, then return
+  if not res: return None
+  
   byTime = np.argsort(res['time'])
   # if byTime not equal to np.arange(len(byTime)), then rearrange
   if not all(x == i for i, x in enumerate(byTime)):
