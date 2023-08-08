@@ -34,6 +34,6 @@ class CThreadedEyeTracker:
       res = self._tracker.track()
       with self._lock:
         self._results = res
-      time.sleep(0) # idle
+      time.sleep(0.01) # idle
       continue
     return

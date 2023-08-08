@@ -6,14 +6,11 @@ import collections
 import Core.CDataSampler_utils as DSUtils
 
 class CDataSampler:
-  def __init__(
-    self, storage, defaults={}, goalHashScale=100
-  ):
+  def __init__(self, storage, defaults={}):
     self._storage = storage
     self._defaults = defaults
     self._samplesByHash = {}
     self._mainHashes = []
-    self._goalHashScale = goalHashScale
     return
 
   def __len__(self):
@@ -21,10 +18,12 @@ class CDataSampler:
   
   def _hashesFor(self, goal):
     goal = np.array(goal) - 0.5 # centered
-    x = np.trunc(goal * self._goalHashScale)
-
-    res = [str(x)]
-    return res
+    # return [ str(np.trunc(goal * s)) for s in [3, 7, 17, 37]]
+    RHash = '%d' % (np.sqrt(np.square(goal).sum()) / 0.1, )
+    # angel in degrees
+    angel = np.arctan2(goal[1], goal[0]) / np.pi * 180
+    AHash = '%d' % (angel / 10, )
+    return [RHash, AHash]
     
   def _bucketFor(self, *args, **kwargs):
     hashes = self._hashesFor(*args, **kwargs)
@@ -313,6 +312,14 @@ if __name__ == '__main__':
   from Core.CSamplesStorage import CSamplesStorage
   folder = os.path.dirname(os.path.dirname(__file__))
   ds = CDataSampler( CSamplesStorage() )
+  dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
+  ds.addBlock(dsBlock)
+  # print count of samples in each bucket
+  for lA, vA in ds._samplesByHash.items():
+    print(lA, len(vA))
+    # for lB, vB in vA.items():
+    #   print('  ', lB, len(vB))
+  exit(0)
 
   import matplotlib.pyplot as plt
   data = ds._getShifts(512)
@@ -328,8 +335,6 @@ if __name__ == '__main__':
   # both = np.logical_and(blankLeft, blankRight)
   # print('Both', both.sum())
   # exit(0)
-  dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
-  ds.addBlock(dsBlock)
 
   xy = ds.sample(
     4, timesteps=5, 

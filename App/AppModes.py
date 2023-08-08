@@ -1,4 +1,5 @@
 import numpy as np
+import pygame
 import pygame.locals as G
 from App.Utils import Colors, normalized
 from App.CSpinningTarget import CSpinningTarget
@@ -56,10 +57,6 @@ class CMoveToGoal(CAppMode):
     self._app.drawObject(pos)
     return
   pass
-
-class CFollowMode(CMoveToGoal):
-  def _nextGoal(self, old):
-    return self._app.sampleNextGoal(old)
 
 class CCircleMovingMode(CMoveToGoal):
   def __init__(self, app):
@@ -261,13 +258,77 @@ class CCornerMode(CAppMode):
         self._cornerId = (N + self._cornerId + 1) % N
         pass
     return
-
   pass
 #####################
+# TODO: find a way to collect data during the game mode and then use it to train the model
+# Maybe store the last 2 seconds before the hit
+class CGameMode:
+  def __init__(self, app):
+    self._app = app
+    self._pos = np.zeros((2, )) + 0.5
+    self._T = 0.0
+    self._currentRadius = 0.0
+    self._radiusPerSecond = 0.01
+    self._hitsHistory = []
+    self._hits = 0
+    self._maxHits = 3
+    return
+  
+  def on_tick(self, deltaT):
+    self._T += deltaT
+    T = self._T
+    self._currentRadius = T * self._radiusPerSecond
+    return
+  
+  def on_render(self, window):
+    wh = np.array(window.get_size())
+    pos = tuple(np.multiply(wh, self._pos).astype(np.int32))
+    self._app.drawObject(pos, color=Colors.RED, R=3)
+    # second circle
+    R = np.multiply(wh, self._currentRadius).min().astype(np.int32)
+    pygame.draw.circle(window, Colors.RED, pos, int(R), width=1)
+
+    # score at the top center
+    if 0 < len(self._hitsHistory):
+      mean = np.mean(self._hitsHistory)
+      T = '%02d:%02d' % (mean // 60, mean % 60)
+      self._app.drawText(
+        'Hits: %d, mean accuracy: %.4f, time: %s' % (len(self._hitsHistory), mean, T),
+        pos=(wh[0] // 2, 80),
+        color=Colors.BLACK,
+      )
+    return
+    
+  def on_event(self, event):
+    return
+  
+  def play(self, pos, tracked):
+    pos = np.array(pos).reshape((2, ))
+    # check if the click is inside the circle
+    D = np.square(np.subtract(pos, self._pos)).sum()
+    D = np.sqrt(D)
+    if D < self._currentRadius:
+      self._hit(D)
+    return
+  
+  def _hit(self, D):
+    self._hitsHistory.append(D + 1e-6)
+    self._T = 0.0
+    self._currentRadius = 0.0
+
+    self._hits += 1
+    if self._maxHits <= self._hits:
+      self._pos = np.random.uniform(size=(2, ))
+      self._hits = 0
+    return
+  pass
+
+#####################
 APP_MODES = [
+  CGameMode,
   CLookAtMode,
   CCornerMode,
   CSplineMode,
-#   CFollowMode,
   CCircleMovingMode,
+  CGameMode,
 ]

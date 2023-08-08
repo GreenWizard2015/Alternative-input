@@ -10,8 +10,6 @@ from Core.CDataSampler import CDataSampler
 from collections import defaultdict
 
 BATCH_SIZE = 128 * 4
-SAMPLES_PER_BUCKET = 5
-SAMPLE_ONCE = True
 PARAMS = dict(
   timesteps=5,
   stepsSampling='last',
@@ -25,31 +23,22 @@ outputFolder = os.path.join(folder, 'test')
 def samplesStream():
   ds = CDataSampler( CSamplesStorage(), defaults=PARAMS )
   ds.addBlock(Utils.datasetFrom(os.path.join(folder, 'test.npz')))
+  batchSize = BATCH_SIZE
+  N = len(ds)
 
-  for indices in ds.lowlevelSamplesIndexes():
-    indices = list(indices)
-    samplesN = SAMPLES_PER_BUCKET
-    # take indices from the bucket by chunks of SAMPLES_PER_BUCKET
-    while (0 < len(indices)) and (0 < samplesN):
-      random.shuffle(indices)
-      indicesChunk = indices[:SAMPLES_PER_BUCKET]
-      batch, rejected, accepted = ds.sampleByIds(indicesChunk)
+  for i in range(0, N, batchSize):
+    indices = list(range(i, min(i + batchSize, N)))
+    batch, rejected, accepted = ds.sampleByIds(indices)
+    if batch is None: continue
 
-      indicesToRemove = indicesChunk if SAMPLE_ONCE else rejected
-      for idx in indicesToRemove: indices.remove(idx)
-
-      if batch is None: continue
-
-      # main batch
-      x, (y, ) = batch
-      N = min(len(y), samplesN)
-      samplesN -= N
-      for idx in range(N):
-        for kind in ['clean']:
-          res = {k: v[idx, None].numpy() for k, v in x[kind].items()}
-          res['y'] = y[idx, None]
-          yield res
-        continue
+    # main batch
+    x, (y, ) = batch
+    for idx in range(len(y)):
+      for kind in ['clean']:
+        res = {k: v[idx, None].numpy() for k, v in x[kind].items()}
+        res['y'] = y[idx, None]
+        yield res
+      continue
     continue
   return
 

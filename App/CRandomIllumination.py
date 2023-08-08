@@ -49,7 +49,9 @@ class CIlluminationSource:
     wh = np.array(window.get_size())
     pos = (self._pos * wh).astype(np.int32)
     color = (self._color * 255).astype(np.int32)
-    pygame.draw.circle(window, color, pos, self._radius)
+    R = self._radius
+    R = (0.1 * wh).astype(np.int32).min()
+    pygame.draw.circle(window, color, pos, R)
     return
   pass
 

@@ -3,6 +3,7 @@
 import numpy as np
 import pygame
 import pygame.locals as G
+import cv2
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
@@ -29,6 +30,13 @@ class App:
     
     self._history = []
     self._illumination = CRandomIllumination()
+
+    self._cameraView = None
+    self._cameraSurface = None
+
+    self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
+    if self._cameraView is not None: # create camera surface
+      self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
     return
   
   @property
@@ -80,8 +88,23 @@ class App:
     lastTracked = None
     tracked = self._tracker.track()
     if not(tracked is None):
-      self._currentMode.accept(tracked)
+      # dirty implementation of game mode
+      isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
+      if isGameMode:
+        self._currentMode.play(self._smoothedPrediction, tracked)
+      else:
+        self._currentMode.accept(tracked)
       
+      if not(self._cameraView is None):
+        WH = self._cameraView[1] - self._cameraView[0]
+        raw = tracked['raw']
+        raw = cv2.resize(raw, tuple(WH.astype(np.int32)))
+        surf = pygame.surfarray.pixels3d(self._cameraSurface)
+        raw = raw[:, :, ::-1] # RGB -> BGR
+        raw = np.swapaxes(raw, 0, 1) # H x W x C -> W x H x C
+        surf[:, :, :] = raw # BGR -> RGB
+        del surf # release surface
+        pass
       lastTracked = {
         'tracked': tracked,
         'pos': np.array(self._smoothedPrediction, np.float32)
@@ -112,11 +135,22 @@ class App:
     
   def on_render(self):
     window = self._display_surf
-    # take color from Colors.asList based on current time, change every 5 seconds
-    clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
-    window.fill(clr)
+    # dirty implementation of game mode
+    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
+    if isGameMode:
+      clr = Colors.SILVER
+      window.fill(clr)
+    else:
+      # take color from Colors.asList based on current time, change every 5 seconds
+      clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
+      clr = Colors.SILVER
+      window.fill(clr)
+      self._illumination.on_render(window)
+      pass
+
+    if not(self._cameraSurface is None): # render camera surface
+      window.blit(self._cameraSurface, self._cameraView)
     
-    self._illumination.on_render(window)
     self._currentMode.on_render(window)
     self._renderPredictions()
     
@@ -196,8 +230,9 @@ def modeA(folder):
     pass
   return
 
-def modeB(folder, datasetName='Dataset-test'):
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, datasetName), 5) as dataset:
+# just collect data, no learning or prediction to save computational resources
+def runDataCollection(folder, stepsN=5):
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), stepsN) as dataset:
     app = App(tracker, dataset, predictor=lambda *x: None)
     app.run()
     pass
@@ -206,8 +241,7 @@ def modeB(folder, datasetName='Dataset-test'):
 def main():
   folder = os.path.join(os.path.dirname(__file__), 'Data')
   modeA(folder)
-  # modeB(folder, datasetName='Dataset')
-  # modeB(folder, datasetName='Dataset-test')
+  # runDataCollection(folder)
   return
 
 if __name__ == '__main__':
