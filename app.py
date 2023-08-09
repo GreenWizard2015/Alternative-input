@@ -14,7 +14,8 @@ import App.AppModes as AppModes
 from App.CRandomIllumination import CRandomIllumination
 
 class App:
-  def __init__(self, tracker, dataset, predictor):
+  def __init__(self, tracker, dataset, predictor, fps=30, showWebcam=False):
+    self._fps = fps
     self._running = True
     
     self._lastPrediction = None
@@ -34,8 +35,8 @@ class App:
     self._cameraView = None
     self._cameraSurface = None
 
-    self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
-    if self._cameraView is not None: # create camera surface
+    if showWebcam:
+      self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
       self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
     return
   
@@ -87,12 +88,10 @@ class App:
   def on_tick(self, deltaT):
     lastTracked = None
     tracked = self._tracker.track()
+    # dirty implementation of game mode
+    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
     if not(tracked is None):
-      # dirty implementation of game mode
-      isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
-      if isGameMode:
-        self._currentMode.play(self._smoothedPrediction, tracked)
-      else:
+      if not isGameMode:
         self._currentMode.accept(tracked)
       
       if not(self._cameraView is None):
@@ -128,6 +127,8 @@ class App:
         np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
         0.0, 1.0
       )
+      if isGameMode:
+        self._currentMode.play(predPos, None)
     #####################
     self._currentMode.on_tick(deltaT)
     self._illumination.on_tick(deltaT)
@@ -197,7 +198,7 @@ class App:
       self.on_tick((pygame.time.get_ticks() - T) / 1000)
       self.on_render()
       T = pygame.time.get_ticks()
-      clock.tick(30)
+      clock.tick(self._fps)
       continue
       
     pygame.quit()

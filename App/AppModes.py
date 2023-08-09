@@ -269,9 +269,12 @@ class CGameMode:
     self._T = 0.0
     self._currentRadius = 0.0
     self._radiusPerSecond = 0.01
-    self._hitsHistory = []
     self._hits = 0
     self._maxHits = 3
+
+    self._totalTime = 0
+    self._totalHits = 0
+    self._totalDistance = 0
     return
   
   def on_tick(self, deltaT):
@@ -289,11 +292,11 @@ class CGameMode:
     pygame.draw.circle(window, Colors.RED, pos, int(R), width=1)
 
     # score at the top center
-    if 0 < len(self._hitsHistory):
-      mean = np.mean(self._hitsHistory)
-      T = '%02d:%02d' % (mean // 60, mean % 60)
+    if 0 < self._totalHits:
       self._app.drawText(
-        'Hits: %d, mean accuracy: %.4f, time: %s' % (len(self._hitsHistory), mean, T),
+        'Hits: %d, mean accuracy: %.4f, time: %.1f' % (
+          self._totalHits, self._totalDistance / self._totalHits, self._totalTime / self._totalHits
+        ),
         pos=(wh[0] // 2, 80),
         color=Colors.BLACK,
       )
@@ -312,7 +315,10 @@ class CGameMode:
     return
   
   def _hit(self, D):
-    self._hitsHistory.append(D + 1e-6)
+    self._totalHits += 1
+    self._totalDistance += D
+    self._totalTime += self._T
+    
     self._T = 0.0
     self._currentRadius = 0.0
 

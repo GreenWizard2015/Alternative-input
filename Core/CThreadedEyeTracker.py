@@ -1,12 +1,12 @@
 from Core.CEyeTracker import CEyeTracker
 import threading
-import time
 
 class CThreadedEyeTracker:
-  def __init__(self):
+  def __init__(self, fps=30):
     self._lock = threading.Lock()
     self._done = threading.Event()
     self._results = None
+    self._fps = fps
     return
 
   def __enter__(self):
@@ -30,10 +30,10 @@ class CThreadedEyeTracker:
     return res
   
   def _trackLoop(self):
-    while not self._done.isSet():
+    # wait for the event to be set up to 1/fps seconds
+    while not self._done.wait(1.0 / self._fps):
       res = self._tracker.track()
       with self._lock:
         self._results = res
-      time.sleep(0.01) # idle
       continue
     return
