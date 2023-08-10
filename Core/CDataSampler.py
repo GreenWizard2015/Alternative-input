@@ -6,9 +6,12 @@ import collections
 import Core.CDataSampler_utils as DSUtils
 
 class CDataSampler:
-  def __init__(self, storage, defaults={}):
+  # TODO: investigate why training with uniform sampling is better than with balanced sampling
+  #       (maybe it's just an artifact of the evaluation method, because the test set isn't balanced)
+  def __init__(self, storage, defaults={}, balancingMethod='uniform'):
     self._storage = storage
     self._defaults = defaults
+    self._balancingMethod = balancingMethod
     self._samplesByHash = {}
     self._mainHashes = []
     return
@@ -17,6 +20,9 @@ class CDataSampler:
     return len(self._storage)
   
   def _hashesFor(self, goal):
+    if 'uniform' == self._balancingMethod:
+      return 'uniform'
+
     goal = np.array(goal) - 0.5 # centered
     # return [ str(np.trunc(goal * s)) for s in [3, 7, 17, 37]]
     RHash = '%d' % (np.sqrt(np.square(goal).sum()) / 0.1, )
