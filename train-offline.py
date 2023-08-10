@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
+# TODO: rewrite this file to support the command line parameters and the W&B logging
 import numpy as np
 from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestLoader import CTestLoader
@@ -46,13 +47,13 @@ def evaluate():
   lossPerSample = {'loss': [], 'pos': []}
   predV = []
   predDist = []
-  # Y = []
+  Y = []
   for batchId in range(len(testDataset)):
     _, (y,) = batch = testDataset[batchId]
     loss, predP, dist = model.eval(batch)
     predV.append(predP)
     predDist.append(dist)
-    # Y.append(y[:, -1, 0])
+    Y.append(y[:, -1, 0])
     for l, pos in zip(loss, y[:, -1]):
       lossPerSample['loss'].append(l)
       lossPerSample['pos'].append(pos[0])
@@ -64,12 +65,13 @@ def evaluate():
     qu = qu.transpose(1, 0, *np.arange(2, len(qu.shape)))
     return qu.reshape((qu.shape[0], -1, qu.shape[-1]))
 
-  if not False:
-    # Y = unbatch(Y)
+  if True:
+    Y = unbatch(Y).reshape((-1, 2))
     predV = unbatch(predV).reshape((-1, 2))
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
     plt.figure(figsize=(8, 8))
+    plt.plot(Y[:, 0], Y[:, 1], 'o', markersize=1)
     plt.plot(predV[:, 0], predV[:, 1], 'o', markersize=1)
     for i in range(5):
       d = i * 0.1

@@ -3,6 +3,7 @@
 import numpy as np
 import pygame
 import pygame.locals as G
+import cv2
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
@@ -13,7 +14,8 @@ import App.AppModes as AppModes
 from App.CRandomIllumination import CRandomIllumination
 
 class App:
-  def __init__(self, tracker, dataset, predictor):
+  def __init__(self, tracker, dataset, predictor, fps=30, showWebcam=False):
+    self._fps = fps
     self._running = True
     
     self._lastPrediction = None
@@ -29,6 +31,13 @@ class App:
     
     self._history = []
     self._illumination = CRandomIllumination()
+
+    self._cameraView = None
+    self._cameraSurface = None
+
+    if showWebcam:
+      self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
+      self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
     return
   
   @property
@@ -79,9 +88,22 @@ class App:
   def on_tick(self, deltaT):
     lastTracked = None
     tracked = self._tracker.track()
+    # dirty implementation of game mode
+    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
     if not(tracked is None):
-      self._currentMode.accept(tracked)
+      if not isGameMode:
+        self._currentMode.accept(tracked)
       
+      if not(self._cameraView is None):
+        WH = self._cameraView[1] - self._cameraView[0]
+        raw = tracked['raw']
+        raw = cv2.resize(raw, tuple(WH.astype(np.int32)))
+        surf = pygame.surfarray.pixels3d(self._cameraSurface)
+        raw = raw[:, :, ::-1] # RGB -> BGR
+        raw = np.swapaxes(raw, 0, 1) # H x W x C -> W x H x C
+        surf[:, :, :] = raw # BGR -> RGB
+        del surf # release surface
+        pass
       lastTracked = {
         'tracked': tracked,
         'pos': np.array(self._smoothedPrediction, np.float32)
@@ -105,6 +127,8 @@ class App:
         np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
         0.0, 1.0
       )
+      if isGameMode:
+        self._currentMode.play(predPos, None)
     #####################
     self._currentMode.on_tick(deltaT)
     self._illumination.on_tick(deltaT)
@@ -112,11 +136,22 @@ class App:
     
   def on_render(self):
     window = self._display_surf
-    # take color from Colors.asList based on current time, change every 5 seconds
-    clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
-    window.fill(clr)
+    # dirty implementation of game mode
+    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
+    if isGameMode:
+      clr = Colors.SILVER
+      window.fill(clr)
+    else:
+      # take color from Colors.asList based on current time, change every 5 seconds
+      clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
+      clr = Colors.SILVER
+      window.fill(clr)
+      self._illumination.on_render(window)
+      pass
+
+    if not(self._cameraSurface is None): # render camera surface
+      window.blit(self._cameraSurface, self._cameraView)
     
-    self._illumination.on_render(window)
     self._currentMode.on_render(window)
     self._renderPredictions()
     
@@ -163,7 +198,7 @@ class App:
       self.on_tick((pygame.time.get_ticks() - T) / 1000)
       self.on_render()
       T = pygame.time.get_ticks()
-      clock.tick(30)
+      clock.tick(self._fps)
       continue
       
     pygame.quit()
@@ -196,8 +231,9 @@ def modeA(folder):
     pass
   return
 
-def modeB(folder, datasetName='Dataset-test'):
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, datasetName), 5) as dataset:
+# just collect data, no learning or prediction to save computational resources
+def runDataCollection(folder, stepsN=5):
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), stepsN) as dataset:
     app = App(tracker, dataset, predictor=lambda *x: None)
     app.run()
     pass
@@ -206,8 +242,7 @@ def modeB(folder, datasetName='Dataset-test'):
 def main():
   folder = os.path.join(os.path.dirname(__file__), 'Data')
   modeA(folder)
-  # modeB(folder, datasetName='Dataset')
-  # modeB(folder, datasetName='Dataset-test')
+  # runDataCollection(folder)
   return
 
 if __name__ == '__main__':

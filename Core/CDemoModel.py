@@ -12,15 +12,6 @@ def _InputSpec():
     'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
   }
 
-def strangeLoss(ytrue, ypred):
-  mse = tf.losses.mean_squared_error(ytrue, ypred)
-  mae = tf.losses.mean_absolute_error(ytrue, ypred)
-  tf.assert_equal(tf.shape(mse), tf.shape(mae))
-
-  rnd = tf.random.uniform(shape=tf.shape(mse), minval=0.0, maxval=1.0)
-  res = (rnd * mse) + ((1.0 - rnd) * mae)
-  return res
-
 class CDemoModel:
   def __init__(self, timesteps, model='simple', **kwargs):
     self._modelID = model
@@ -58,9 +49,6 @@ class CDemoModel:
     x, (y, ) = Data
     y = y[..., 0, :]
     B, N = tf.shape(y)[0], tf.shape(y)[1]
-    # weight each timestep increasingly
-    w = tf.range(1, N + 1, dtype=tf.float32)[None]
-    w = w / tf.reduce_sum(w) # normalize
     losses = {}
     TV = self._model.trainable_variables
     with tf.GradientTape(watch_accessed_variables=False) as tape:
@@ -69,12 +57,8 @@ class CDemoModel:
       predictions = self._model(data, training=True)
       for i, pts in enumerate(predictions['intermediate']):
         tf.assert_equal(tf.shape(pts), tf.shape(y))
-        loss = strangeLoss(y, pts)
-        tf.assert_equal(tf.shape(loss), (B, N))
-        loss = loss * w # weight each timestep
-        tf.assert_equal(tf.shape(loss), (B, N))
-        loss = tf.reduce_mean(loss)
-        losses['loss-%d' % i] = loss
+        loss = tf.losses.mse(y, pts)
+        losses['loss-%d' % i] = tf.reduce_mean(loss)
         continue
       loss = sum(losses.values())
       losses['loss'] = loss

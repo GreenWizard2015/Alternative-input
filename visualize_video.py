@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
+# TODO: update this script (currently it is not working in any way)
 from collections import defaultdict
 import numpy as np
 from Core.CCoreModel import CCoreModel

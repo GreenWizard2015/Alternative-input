@@ -27,17 +27,14 @@ class IntermediatePredictor(tf.keras.layers.Layer):
       sizes=[128, 64, 32], activation='relu',
       name='%s/MLP' % self.name
     )
-    self._decodePoints = CDecodePoint(
-      16, base=1.1,
-      name='%s/DecodePoints' % self.name
-    )
+    self._decodePoints = L.Dense(2, name='%s/DecodePoints' % self.name)
     return super().build(input_shape)
   
   def call(self, x):
     B = tf.shape(x)[0]
     N = tf.shape(x)[1]
     x = self._mlp(x)
-    x = self._decodePoints(x)
+    x = 0.5 + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
     tf.assert_equal(tf.shape(x), (B, N, 2))
     return x
 ################################################################
@@ -48,14 +45,14 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
   eyeR = L.Input((None, eyeSize, eyeSize, 1))
   context = L.Input((None, contextSize))
 
-  encodedL, encodedR = CRolloutTimesteps(
+  encoded = CRolloutTimesteps(
     eyeEncoder(latentSize=latentSize), name='Eyes'
   )([eyeL, eyeR, context])
   encodedP = CRolloutTimesteps(
     FaceMeshEncoder(latentSize), name='FaceMesh'
   )([points, context])
 
-  combined = L.Concatenate(-1)([encodedP, encodedL, encodedR, context])
+  combined = L.Concatenate(-1)([encodedP, encoded, context])
   combined = sMLP(sizes=[256, latentSize], activation='relu')(combined)
   
   inputs = {
@@ -87,19 +84,32 @@ def Step2LatentModel(latentSize, contextSize):
   temporal = sMLP(sizes=[latentSize, latentSize], activation='relu')(
     L.Concatenate(-1)([stepsData, encodedT, context])
   )
-  for i in range(3):
-    temporal = CMyTransformerLayer(
-      latentSize, 32,
-      # toQuery=sMLP(sizes=[64, latentSize], activation='relu'),
-      # toKey=sMLP(sizes=[64, latentSize], activation='relu'),
-      useNormalization=False
-    )(temporal)
+  intermediate.append(temporal) # aux output per time step
+  # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+  useLSTM = not True
+  if useLSTM:
+    temp = L.LSTM(128, return_sequences=True)(temporal)
+    for i in range(2):
+      temp = L.LSTM(temp.shape[-1], return_sequences=True)(temp)
+    temp = sMLP(sizes=[temp.shape[-1], temporal.shape[-1]], activation='relu')(temp)
+    temporal = temporal + CGate(axis=[-1])(temp)
     intermediate.append(temporal)
-    continue
+  else:
+    for i in range(3):
+      temporal = CMyTransformerLayer(
+        latentSize, 32,
+        # toQuery=sMLP(sizes=[64, latentSize], activation='relu'),
+        # toKey=sMLP(sizes=[64, latentSize], activation='relu'),
+        useNormalization=True,
+      )(temporal)
+      intermediate.append(temporal)
+      continue
+  # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   
   latent = temporal
 #   IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
   IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
+  intermediate = [intermediate[i] for i in [0, -1]]
   intermediate = [IP(x) for x in intermediate]
   result = intermediate[-1] #sum(intermediate) / len(intermediate)
   return tf.keras.Model(
@@ -226,7 +236,7 @@ def ARModel(FACE_LATENT_SIZE=None, residualPos=False):
 
 if __name__ == '__main__':
   X = Face2LatentModel(steps=5, latentSize=64, contexts=None)
-  X['main'].summary(expand_nested=False)
+  X['main'].summary(expand_nested=True)
   # X['Face2Step'].summary(expand_nested=False)
   # X['Step2Latent'].summary(expand_nested=False)
   # print(X['main'].outputs)

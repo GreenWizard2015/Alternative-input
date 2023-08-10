@@ -2,6 +2,8 @@
 
 ## Version 0 ([Commit 4d00c1](https://github.com/GreenWizard2015/Alternative-input/blob/4d00c1f09f1a6aa96ed46c70c132986a9b728d41/))
 
+Video: [YouTube](https://youtu.be/oKqpPAhnBPQ).
+
 The project was initiated on June 1, 2021, although its very first version was written in 2020. I was aware of eye trackers but always considered them too expensive and, most importantly, inconvenient. Although this might sound presumptuous, but recent practical experiences confirmed those doubts.
 
 From the outset, the decision was made to use an extremely affordable webcam. Understanding the complexity of facial detection, I decided to build the solution based on [MediaPipe](https://developers.google.com/mediapipe).
@@ -10,9 +12,9 @@ The first version was quite simple and used a hardcoded algorithm. Unfortunately
 
 In this version, I implemented a basic mapping of facial position/movement to screen coordinates. This approach is simple, relatively intuitive, and potentially accurate. However, in practice, it turned out to be highly uncomfortable, causing neck and eye strain. Also, it's clear that this method is not universal, and there will be many cases requiring significant additional improvements.
 
-It's a bit strange, but unfortunately, I have recorded a full [video](https://youtu.be/oKqpPAhnBPQ) showcasing the system's operation only for this version.
-
 ## Neural network based solution
+
+Video: [YouTube](https://youtu.be/FE1eGgjzFq8).
 
 This repository contains a solution based on neural networks for eye movement detection and gaze tracking. In the initial stages of development, I even provided [screencasts](https://www.youtube.com/playlist?list=PLRjmXqZTJnJUWnLDQGlNGBRW9_ICNuBRd) to demonstrate the development process. However, as the complexity grew, recording screencasts became problematic due to hardware limitations on my computer.
 
