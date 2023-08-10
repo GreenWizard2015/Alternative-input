@@ -7,6 +7,9 @@ import time
 class CEyeTracker:
   def __init__(self):
     self._PRESENCE_THRESHOLD = self._VISIBILITY_THRESHOLD = 0.5
+
+    self._leftEyeIdx = np.array(list(Utils.PART_TO_INDECES['left eye']), np.int32)
+    self._rightEyeIdx = np.array(list(Utils.PART_TO_INDECES['right eye']), np.int32)
     return
 
   def __enter__(self):
@@ -32,6 +35,7 @@ class CEyeTracker:
   def track(self):
     ret, frame = self._capture.read()
     # Make detection in BGR space
+    BGR = True
     results = self._pose.process(frame)
     image = frame
     facePoints, LE, RE, lipsDistancePx = self._processFace(results, image)
@@ -40,38 +44,43 @@ class CEyeTracker:
     LEVisible = 5 < len(LE)
     # if eyes are invisible, try to find RGB
     if not(REVisible or LEVisible):
+      BGR = False
       results = self._pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
       facePoints, LE, RE, lipsDistancePx = self._processFace(results, image)
       pass
 
-    res = {
+    # if eyes are still invisible, return None
+    if not(REVisible or LEVisible):
+      return None
+
+    return {
       # main data
       'time': time.time(),
       'face points': facePoints,
-      'right eye': self._extract(image, RE),
-      'left eye': self._extract(image, LE),
+      'left eye': self._extract(image, LE, BGR),
+      'right eye': self._extract(image, RE, BGR),
       # misc
       'lips distance': lipsDistancePx,
       'raw': frame,
     }
-    return res
   
-  def _extract(self, image, pts):
+  def _extract(self, image, pts, isBGR):
     sz = (32, 32)
     padding = 5
     if len(pts) < 5:
-      return np.zeros((*sz, image.shape[-1]), image.dtype)
-    
-    XY = np.array(pts)
+      return np.zeros(sz, np.uint8)
 
-    A = (XY.min(axis=0) - padding).clip(min=0)
-    B = XY.max(axis=0) + padding
-    B = np.minimum(B, image.shape[:2][::-1])
+    A = (pts.min(axis=0) - padding).clip(min=0)
+    B = pts.max(axis=0) + padding
+    B = np.minimum(B, image.shape[:2])
     
     crop = image[ A[1]:B[1], A[0]:B[0], ]
     if np.min(crop.shape[:2]) < 8:
-      return np.zeros((*sz, image.shape[-1]), image.dtype)
-    return cv2.resize(crop, sz)
+      return np.zeros(sz, np.uint8)
+    
+    crop = cv2.resize(crop, sz)
+    crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY if isBGR else cv2.COLOR_RGB2GRAY)
+    return crop.astype(np.uint8)
   
   def _processFace(self, pose, image):
     facePoints = {}
@@ -81,20 +90,21 @@ class CEyeTracker:
 
     landmarks = pose.face_landmarks
     if landmarks:
-      H, W = image.shape[:2]
-      face_points_scaled = Utils.decodeLandmarks(landmarks, image.shape[:2], self._VISIBILITY_THRESHOLD, self._PRESENCE_THRESHOLD)
-      facePoints = {
-        idx: (x / W, y / H)
-        for idx, (x, y) in face_points_scaled.items()
-      }
+      dims = np.array(image.shape[:2])[::-1]
+      facePoints = Utils.decodeLandmarks(landmarks, self._VISIBILITY_THRESHOLD, self._PRESENCE_THRESHOLD)
       
-      for idx, pt in face_points_scaled.items():
-        if 'right eye' == Utils.INDEX_TO_PART.get(idx, ''):
-          RE.append(pt)
-        if 'left eye' == Utils.INDEX_TO_PART.get(idx, ''):
-          LE.append(pt)
-        continue
+      LE = facePoints[self._leftEyeIdx]
+      RE = facePoints[self._rightEyeIdx]
+      # remove invisible points
+      LE = LE[LE[:, 0] != -1]
+      RE = RE[RE[:, 0] != -1]
+      # convert to pixels
+      LE = np.multiply(LE, dims[None]).astype(np.int32)
+      RE = np.multiply(RE, dims[None]).astype(np.int32)
 
-      lipsDistancePx = np.linalg.norm(np.subtract(face_points_scaled[17], face_points_scaled[0]))
+      # measure distance between lips
+      lipsA = np.array(facePoints[17])
+      lipsB = np.array(facePoints[0])
+      lipsDistancePx = np.linalg.norm(np.multiply(lipsA - lipsB, dims))
       pass
     return(facePoints, LE, RE, lipsDistancePx)

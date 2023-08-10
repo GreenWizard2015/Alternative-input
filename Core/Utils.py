@@ -187,9 +187,8 @@ for k, pairs in FACE_PARTS_CONNECTIONS.items():
       INDEX_TO_PART[i] = k
       PART_TO_INDECES[k].add(i)
 ###################################
-def decodeLandmarks(landmarks, HW, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
-  H, W = HW
-  points = {}
+def decodeLandmarks(landmarks, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
+  points = np.full((468, 2), fill_value=-1, dtype=np.float32)
   for idx, mark in enumerate(landmarks.landmark):
     if (
       (mark.HasField('visibility') and (mark.visibility < VISIBILITY_THRESHOLD)) or
@@ -197,24 +196,21 @@ def decodeLandmarks(landmarks, HW, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
     ):
       continue
     
-    x_px = min(math.floor(mark.x * W), W - 1)
-    y_px = min(math.floor(mark.y * H), H - 1)
-    points[idx] = (x_px, y_px)
+    points[idx, 0] = mark.x
+    points[idx, 1] = mark.y
     continue
+  # clip to 0..1 where not -1
+  # msk = points != -1
+  # points[msk] = np.clip(points[msk], 0.0, 1.0)
   return points
 
 def tracked2sample(data):
-  points = np.full((468, 2), fill_value=-1, dtype=np.float32)
-  for idx, (x, y) in data['face points'].items():
-    points[idx, 0] = x
-    points[idx, 1] = y
-    continue
-    
+  points = data['face points']
   return {
     'time': data['time'],
     'points': points,
-    'left eye': cv2.cvtColor(data['left eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
-    'right eye': cv2.cvtColor(data['right eye'], cv2.COLOR_BGR2GRAY).astype(np.uint8),
+    'left eye': data['left eye'],
+    'right eye': data['right eye'],
   }
 
 def samples2inputs(samples):
