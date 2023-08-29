@@ -1,99 +1,78 @@
 import numpy as np
 import random
+from math import ceil
 import Core.Utils as Utils
 from functools import lru_cache
-import collections
 import Core.CDataSampler_utils as DSUtils
 
 class CDataSampler:
-  # TODO: investigate why training with uniform sampling is better than with balanced sampling
-  #       (maybe it's just an artifact of the evaluation method, because the test set isn't balanced)
-  def __init__(self, storage, defaults={}, balancingMethod='uniform'):
+  def __init__(self, storage, batch_size, minFrames, defaults={}, maxT=1.0):
     self._storage = storage
     self._defaults = defaults
-    self._balancingMethod = balancingMethod
-    self._samplesByHash = {}
-    self._mainHashes = []
+    self._batchSize = batch_size
+    self._maxT = maxT
+    self._minFrames = minFrames
+    self._samples = []
+    self._currentSample = None
+    return
+  
+  def reset(self):
+    random.shuffle(self._samples)
+    self._currentSample = 0
     return
 
   def __len__(self):
-    return len(self._storage)
+    return ceil(len(self._samples) / self._batchSize)
+
+  def _storeSample(self, idx):
+    # store sample if it has enough frames
+    minInd = self._getTrajectoryBefore(idx)
+    if self._minFrames <= (idx - minInd):
+      self._samples.append(idx)
+    return
   
-  def _hashesFor(self, goal):
-    if 'uniform' == self._balancingMethod:
-      return 'uniform'
-
-    goal = np.array(goal) - 0.5 # centered
-    # return [ str(np.trunc(goal * s)) for s in [3, 7, 17, 37]]
-    RHash = '%d' % (np.sqrt(np.square(goal).sum()) / 0.1, )
-    # angel in degrees
-    angel = np.arctan2(goal[1], goal[0]) / np.pi * 180
-    AHash = '%d' % (angel / 10, )
-    return [RHash, AHash]
-    
-  def _bucketFor(self, *args, **kwargs):
-    hashes = self._hashesFor(*args, **kwargs)
-    #######
-    hashA = hashes[0]
-    if not(hashA in self._mainHashes):
-      self._mainHashes.append(hashA)
-    
-    s = self._samplesByHash
-    for h in hashes[:-1]:
-      if not(h in s): s[h] = {}
-      s = s[h]
-      continue
-    h = hashes[-1]
-    if not(h in s): s[h] = []
-    return s[h]
-
   def add(self, sample):
     idx = self._storage.add(sample)
-    sample = self._storage[idx]
-    self._bucketFor(
-      goal=sample['goal'],
-    ).append(idx)
+    self._storeSample(idx)
     return idx
   
   def addBlock(self, samples):
     indexes = self._storage.addBlock(samples)
     for idx in indexes:
-      sample = self._storage[idx]
-      self._bucketFor(
-        goal=sample['goal'],
-      ).append(idx)
+      self._storeSample(idx)
       continue
     return
-  
-  def _sampleIndexFrom(self, bucketID):
-    samples = self._samplesByHash[bucketID]
-    while isinstance(samples, dict):
-      key = random.choice(list(samples.keys()))
-      samples = samples[key]
-      continue
-    return random.choice(samples)
 
-  @lru_cache(None)
-  def _trajectoryRange(self, mainInd, maxT):
+  def _getTrajectoryBefore(self, mainInd):
     mainT = self._storage[mainInd]['time']
-    minT = mainT - maxT
-    maxT = mainT + maxT
+    minT = mainT - self._maxT
     
-    minInd = maxInd = mainInd
+    minInd = mainInd
     for ind in range(mainInd - 1, -1, -1):
       if self._storage[ind]['time'] < minT: break
       minInd = ind
       continue
-
+    return minInd
+  
+  @lru_cache(None)
+  def _trajectoryRange(self, mainInd):
+    '''
+      Returns indexes of samples that are in the range of maxT from the mainInd
+      Returns (minInd, maxInd) where minInd <= mainInd <= maxInd
+    '''
+    mainT = self._storage[mainInd]['time']
+    maxT = mainT + self._maxT
+    maxInd = mainInd
     for ind in range(mainInd, len(self._storage)):
       if maxT < self._storage[ind]['time']: break
       maxInd = ind
       continue
     
+    minInd = self._getTrajectoryBefore(mainInd)
     return minInd, maxInd
 
-  def _trajectory(self, mainInd, maxT):
-    minInd, maxInd = self._trajectoryRange(mainInd, maxT)
+  def _trajectory(self, mainInd):
+    minInd, maxInd = self._trajectoryRange(mainInd)
     return list(range(minInd, mainInd)), list(range(mainInd + 1, maxInd + 1))
   
   def _trajectory2keypoints(self, before, mainInd, after, N):
@@ -121,12 +100,27 @@ class CDataSampler:
       keypoints = np.array([mainPt])
     return keypoints
 
-  def _stepsFor(self, mainInd, steps, stepsSampling='uniform', maxT=1.0, **_):
-    if (steps is None) or (1 == steps): return [mainInd]
-    if mainInd < steps: return False
-    
-    samples, _ = self._trajectory(mainInd, maxT)
-    if len(samples) < (steps - 1): return False
+  def _prepareT(self, res):
+    T = np.array([self._storage[ind]['time'] for ind in res])
+    T -= T[0]
+    diff = np.diff(T, 1)
+    idx = np.nonzero(diff)[0]
+    if len(idx) < 2: return None # all frames have the same time
+    if len(diff) == len(idx):
+      T = diff
+    else:
+      # avg non-zero diff
+      dT = np.min(diff[idx])
+      T = np.append(T, T[-1] + dT)
+      idx = [0, *(1 + idx), len(T) - 1]
+      T = np.interp(np.arange(len(T) - 1), idx, T[idx])
+      T = np.diff(T, 1)
+      pass
+    T = np.insert(T, 0, 0.0)
+    assert len(res) == len(T)
+    return T
+  
+  def _framesFor(self, mainInd, samples, steps, stepsSampling):
     if 'uniform' == stepsSampling:
       samples = random.sample(samples, steps - 1)
     if 'last' == stepsSampling:
@@ -153,53 +147,37 @@ class CDataSampler:
       
     res = list(sorted(samples + [mainInd]))
     assert len(res) == steps
-    ###########################
-    T = np.array([self._storage[ind]['time'] for ind in res])
-    T -= T[0]
-    diff = np.diff(T, 1)
-    idx = np.nonzero(diff)[0]
-    if len(idx) < 2: return False
-    if len(diff) == len(idx):
-      T = diff
-    else:
-      # avg non-zero diff
-      dT = np.min(diff[idx])
-      T = np.append(T, T[-1] + dT)
-      idx = [0, *(1 + idx), len(T) - 1]
-      T = np.interp(np.arange(len(T) - 1), idx, T[idx])
-      T = np.diff(T, 1)
-      pass
-    T = np.insert(T, 0, 0.0)
-    assert len(res) == len(T)
-    return [tuple(x) for x in zip(res, T)]
+    return res
   
-  def _seedsStream(self, N):
-    while 0 < len(self._mainHashes):
-      seeds = random.choices(self._mainHashes, k=2*N)
-      for value, _ in collections.Counter(seeds).most_common():
-        yield value
+  def _stepsFor(self, mainInd, steps, stepsSampling='uniform', **_):
+    if (steps is None) or (1 == steps): return [mainInd]
+    if mainInd < steps: return False
+    
+    samples, _ = self._trajectory(mainInd)
+    if len(samples) < (steps - 1): return False
+    # Try to sample valid frames
+    for _ in range(10):
+      res = self._framesFor(mainInd, samples, steps, stepsSampling)
+      T = self._prepareT(res)
+      if T is not None:
+        assert len(res) == len(T)
+        return [tuple(x) for x in zip(res, T)]
       continue
-    return
+    return False
   
-  def sample(self, N, **kwargs):
+  def sample(self, **kwargs):
     kwargs = {**self._defaults, **kwargs}
     timesteps = kwargs.get('timesteps', None)
-
     indexes = []
-    tries = 10 * N
-    for bucketID in self._seedsStream(N):
-      tries -= 1
-      if tries <= 0: return None
-      
-      indx = self._sampleIndexFrom(bucketID)
-      sampledSteps = self._stepsFor( indx, steps=timesteps, **kwargs )
-      if sampledSteps:
-        indexes.extend(sampledSteps)
-        N -= 1
-        if N <= 0: break
+    for _ in range(self._batchSize):
+      idx = self._samples[self._currentSample]
+      self._currentSample = (self._currentSample + 1) % len(self._samples)
+
+      sampledSteps = self._stepsFor(idx, steps=timesteps, **kwargs)
+      assert sampledSteps is not False, 'Not enough frames for %d' % idx
+      indexes.extend(sampledSteps)
       continue
-    if 0 < N: return None
-    
+
     return self._indexes2XY(indexes, kwargs)
 
   def sampleById(self, idx, **kwargs):
@@ -249,8 +227,8 @@ class CDataSampler:
     return tuple(res)
   
   @lru_cache(None)
-  def _targetFor(self, ind, maxT, keypoints=1, past=True, future=True, **_):
-    before, after = self._trajectory(ind, maxT=maxT)
+  def _targetFor(self, ind, keypoints=1, past=True, future=True, **_):
+    before, after = self._trajectory(ind)
     if not past: before = []
     if not future: after = []
     return self._trajectory2keypoints(before, ind, after, N=keypoints)
@@ -260,8 +238,6 @@ class CDataSampler:
     samples = [self._storage[i] for i, _ in indexesAndTime]
 
     forecast = kwargs.get('forecast', {})
-    maxT = kwargs.get('maxT', 1.0)
-    forecast['maxT'] = forecast.get('maxT', maxT)
     Y = ( np.array([
       self._targetFor(i, **forecast) 
       for i, _ in indexesAndTime
@@ -290,23 +266,10 @@ class CDataSampler:
     ###############
     (Y, ) = Y
     return(X, (Y.astype(np.float32), ))
-  
-  @property
-  def mainSeedsCount(self):
-    return len(self._mainHashes)
-  
-  def lowlevelSamplesIndexes(self):
-    LLBuckets = []
-    def F(bucket):
-      if isinstance(bucket, dict):
-        for v in bucket.values():
-          F(v)
-        return
-      LLBuckets.append(bucket)
-      return
-    F(self._samplesByHash)
-    return LLBuckets
 
+  @property
+  def totalSamples(self):
+    return len(self._storage)
 ##############
 if __name__ == '__main__':
   import tensorflow as tf
@@ -317,14 +280,9 @@ if __name__ == '__main__':
   import os
   from Core.CSamplesStorage import CSamplesStorage
   folder = os.path.dirname(os.path.dirname(__file__))
-  ds = CDataSampler( CSamplesStorage() )
+  ds = CDataSampler( CSamplesStorage(), balancingMethod=dict(context='all') )
   dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
   ds.addBlock(dsBlock)
-  # print count of samples in each bucket
-  for lA, vA in ds._samplesByHash.items():
-    print(lA, len(vA))
-    # for lB, vB in vA.items():
-    #   print('  ', lB, len(vB))
   exit(0)
 
   import matplotlib.pyplot as plt

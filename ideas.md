@@ -20,3 +20,8 @@ This idea partially implemented in [this version](https://github.com/GreenWizard
 
 - normalize eyes images (by transforming them according to keypoints)
 - add keypoints as an additional image channel (maybe, it will help to learn better representation)
+
+- dataset filtration
+  - use pretrained model to filter out frames which produce extremely diverged predictions (i.e. if we take several sets of frames, including "target" frame, we should get similar predictions for all of them)
+  - smooth trajectories
+- split training dataset into smaller datasets (take 25% of frames for first training iteration, then 50%, then 75%, then 100%)

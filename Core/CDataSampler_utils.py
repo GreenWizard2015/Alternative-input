@@ -1,3 +1,5 @@
+from Core.Utils import FACE_MESH_INVALID_VALUE
+
 import numpy as np
 def gaussian(x, mu, sig):
   return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
@@ -113,15 +115,15 @@ def toTensor(data, params):
     imgA = tf.where(tf.logical_and(mask, maskA)[:, None, None], 0.0, imgA)
     imgB = tf.where(tf.logical_and(mask, maskB)[:, None, None], 0.0, imgB)
   ##########################
-  validPointsMask = tf.reduce_all(-1.0 < points, axis=-1, keepdims=True)
+  validPointsMask = tf.reduce_all(FACE_MESH_INVALID_VALUE != points, axis=-1, keepdims=True)
   if 0.0 < pointsDropout:
     mask = tf.random.uniform(tf.shape(points)[:-1])[..., None] < pointsDropout
-    points = tf.where(mask, -1.0, points)
+    points = tf.where(mask, FACE_MESH_INVALID_VALUE, points)
   
   if 0.0 < pointsNoise:
     points += tf.random.normal(tf.shape(points), stddev=pointsNoise)
 
-  points = tf.where(validPointsMask, points, -1.0)
+  points = tf.where(validPointsMask, points, FACE_MESH_INVALID_VALUE)
   ##########################
   return {
     'augmented': {

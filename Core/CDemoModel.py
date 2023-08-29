@@ -29,7 +29,7 @@ class CDemoModel:
   
   def _compile(self):
     if not self.trainable: return
-    self._model.compile(tf.optimizers.Adam(learning_rate=1e-4))
+    self._model.compile(tf.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-6))
     return
   
   @tf.function(
@@ -55,10 +55,11 @@ class CDemoModel:
       tape.watch(TV)
       data = x['augmented']
       predictions = self._model(data, training=True)
-      for i, pts in enumerate(predictions['intermediate']):
+      predictions = dict(**predictions['intermediate'], final=predictions['result'])
+      for name, pts in predictions.items():
         tf.assert_equal(tf.shape(pts), tf.shape(y))
         loss = tf.losses.mse(y, pts)
-        losses['loss-%d' % i] = tf.reduce_mean(loss)
+        losses['loss-%s' % name] = tf.reduce_mean(loss)
         continue
       loss = sum(losses.values())
       losses['loss'] = loss

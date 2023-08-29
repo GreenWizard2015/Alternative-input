@@ -214,28 +214,56 @@ class CQuantizeLayer(tf.keras.layers.Layer):
     quantized = 0.5 + tf.clip_by_value(quantized, self._minValue, self._maxValue)
     return x + tf.stop_gradient(quantized - x)
 ####################################
-# causal self-attention transformer
-class CMyTransformerLayer(tf.keras.layers.Layer):
-  def __init__(self,
-    latentSize, num_heads=8,
-    toQuery=None, toKey=None,
-    useNormalization=False, 
-    **kwargs
-  ):
+class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
+  def __init__(self, eps=1e-8, headsN=3, **kwargs):
     super().__init__(**kwargs)
-    self._layerNorm = tf.keras.layers.LayerNormalization() if useNormalization else lambda x: x
-    self._mha = tf.keras.layers.MultiHeadAttention(
-      num_heads=num_heads, dropout=0.01, key_dim=latentSize
+    self._eps = eps
+    self._scale = tf.Variable(
+      initial_value=tf.random.normal((1, ), mean=0.0, stddev=0.1),
+      trainable=True, dtype=tf.float32,
+      name=self.name + '/_scale'
     )
-    self._toQuery = toQuery if toQuery is not None else lambda x: x
-    self._toKey = toKey if toKey is not None else lambda x: x
+    self._headsN = headsN
+    self._normalization = None
     return
+  
+  @property
+  def scale(self): return tf.nn.sigmoid(self._scale) * (1.0 - 2.0 * self._eps) + self._eps # [eps, 1 - eps]
+  
+  def _SMNormalization(self, xhat):
+    xhat = tf.nn.softmax(xhat, axis=-1)
+    xhat = xhat - tf.reduce_mean(xhat, axis=-1, keepdims=True)
+    rng = tf.reduce_max(tf.abs(xhat), axis=-1, keepdims=True)
+    return 1.0 + tf.math.divide_no_nan(xhat, rng * self.scale) # [1 - scale, 1 + scale]
+  
+  def _HeadwiseNormalizationNoPadding(self, xhat):
+    shape = tf.shape(xhat)
+    # reshape [B, ..., N * headsN] -> [B, ..., headsN, N], apply normalization, reshape back
+    xhat = tf.reshape(xhat, tf.concat([shape[:-1], [self._headsN, shape[-1] // self._headsN]], axis=-1))
+    xhat = self._SMNormalization(xhat)
+    xhat = tf.reshape(xhat, shape)
+    return xhat
+  
+  def _HeadwiseNormalizationPadded(self, lastChunk):  
+    def F(xhat):
+      mainPart = self._HeadwiseNormalizationNoPadding(xhat[..., :-lastChunk])
+      tailPart = self._SMNormalization(xhat[..., -lastChunk:])
+      return tf.concat([mainPart, tailPart], axis=-1)
+    return F
+  
+  def build(self, input_shapes):
+    _, xhatShape = input_shapes
+    self._normalization = self._SMNormalization
+    if 1 < self._headsN:
+      assert 1 < (xhatShape[-1] // self._headsN), "too few channels for headsN"
 
+      lastChunk = xhatShape[-1] % self._headsN
+      self._normalization = self._HeadwiseNormalizationPadded(lastChunk) if 0 < lastChunk else self._HeadwiseNormalizationNoPadding
+      pass
+    return super().build(input_shapes)
+  
   def call(self, x):
-    attention = self._mha(
-      query=self._toQuery(x),
-      key=self._toKey(x),
-      value=x,
-      use_causal_mask=True
-    )
-    return self._layerNorm(x + attention)
+    x, xhat = x
+    # return (tf.nn.relu(x) + self._eps) * (self._normalization(xhat) + self._eps) # more general/stable version
+    # with SM normalization, relu and addition are redundant
+    return x * self._normalization(xhat)

@@ -1,0 +1,7 @@
+tensorflow==2.7.0
+mediapipe==0.9.1.0
+numpy
+opencv-python
+pygame
+scipy
+tqdm

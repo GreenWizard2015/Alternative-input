@@ -12,24 +12,6 @@ import os
 import Core.Utils as Utils
 import argparse
 
-def extractSessions(dataset, TDelta):
-  res = []
-  T = 0
-  prevSession = 0
-  for i, t in enumerate(dataset['time']):
-    if TDelta < (t - T):
-      if 1 < (i - prevSession):
-        res.append((prevSession, i))
-      prevSession = i
-      pass
-    T = t
-    continue
-  # if last session is not empty, then append it
-  if prevSession < len(dataset['time']):
-    res.append((prevSession, len(dataset['time'])))
-    pass
-  return res
-
 def splitSession(start, end, ratio, framesPerChunk):
   N = end - start
   idx = np.arange(start, end)
@@ -76,12 +58,15 @@ def dropPadding(idx, padding):
   return res
 
 def main(args):
+  # set random seed (I hope this is enough to make the results reproducible)
+  np.random.seed(args.seed)
+  ####
   MAIN_FOLDER = os.path.join(os.path.dirname(__file__), 'Data')
   src = os.path.join(MAIN_FOLDER, 'Dataset')
   # load dataset
   dataset = Utils.datasetFrom(src)
   # split dataset into sessions
-  sessions = extractSessions(dataset, float(args.time_delta))
+  sessions = Utils.extractSessions(dataset, float(args.time_delta))
   # print sessions and their durations for debugging
   print('Found {} sessions'.format(len(sessions)))
   for i, (start, end) in enumerate(sessions):
@@ -136,6 +121,7 @@ if __name__ == '__main__':
   parser.add_argument('--test-ratio', type=float, default=0.2, help='Ratio of testing samples')
   parser.add_argument('--frames-per-chunk', type=int, default=25, help='Number of frames per chunk')
   parser.add_argument('--test-padding', type=int, default=5, help='Number of frames to skip at the beginning/end of each session')
+  parser.add_argument('--seed', type=int, default=42, help='Random seed')
   args = parser.parse_args()
   main(args)
   pass

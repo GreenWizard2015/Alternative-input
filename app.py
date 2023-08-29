@@ -7,14 +7,19 @@ import cv2
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
+from Core.CDummyPredictor import CDummyPredictor
 from Core.CDemoModel import CDemoModel
+from Core.Utils import FACE_MESH_INVALID_VALUE
 import os, time
 from App.Utils import Colors
 import App.AppModes as AppModes
 from App.CRandomIllumination import CRandomIllumination
+from App.CBackground import CBackground
+import argparse
 
 class App:
-  def __init__(self, tracker, dataset, predictor, fps=30, showWebcam=False):
+  def __init__(self, tracker, dataset, predictor, fps=30, showWebcam=False, hasPredictions=True):
+    self._canPredict = hasPredictions
     self._fps = fps
     self._running = True
     
@@ -30,7 +35,9 @@ class App:
     self._currentMode = AppModes.APP_MODES[0](self)
     
     self._history = []
+    self._enableIllumination = False
     self._illumination = CRandomIllumination()
+    self._background = CBackground()
 
     self._cameraView = None
     self._cameraSurface = None
@@ -38,7 +45,30 @@ class App:
     if showWebcam:
       self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
       self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
+
+    self._predictorMaskFace = False
+    self._predictorMaskLeftEye = False
+    self._predictorMaskRightEye = False
     return
+  
+  @property
+  def hasPredictions(self): return self._canPredict
+  
+  def _transformTracked(self, tracked):
+    if tracked is None: return None
+
+    tracked = tracked['tracked']
+    res = dict(**tracked)
+
+    if self._predictorMaskFace:
+      res['face points'] = np.full_like(tracked['face points'], FACE_MESH_INVALID_VALUE)
+
+    if self._predictorMaskLeftEye:
+      res['left eye'] = np.full_like(tracked['left eye'], 0.0)
+
+    if self._predictorMaskRightEye:
+      res['right eye'] = np.full_like(tracked['right eye'], 0.0)
+    return res
   
   @property
   def _display_surf(self):
@@ -66,16 +96,13 @@ class App:
       self._running = False
       return
 
+    self._background.on_event(event)
     self._currentMode.on_event(event)
     if event.type == G.KEYDOWN:
       if G.K_ESCAPE == event.key:
         self._running = False
         return
       
-      if G.K_SPACE == event.key:
-        self._running = False
-        return
-     
       if G.K_s == event.key:
         self._showPredictions = not self._showPredictions
         return
@@ -83,16 +110,25 @@ class App:
       if G.K_1 <= event.key < (G.K_1 + len(AppModes.APP_MODES)):
         self._currentModeId = ind = event.key - G.K_1
         self._currentMode = AppModes.APP_MODES[ind](self)
+      # toggle illumination (L)
+      if G.K_l == event.key:
+        self._enableIllumination = not self._enableIllumination
+      # predictor masks switches (F1, F2, F3)
+      if G.K_F1 == event.key:
+        self._predictorMaskFace = not self._predictorMaskFace
+
+      if G.K_F2 == event.key:
+        self._predictorMaskLeftEye = not self._predictorMaskLeftEye
+
+      if G.K_F3 == event.key:
+        self._predictorMaskRightEye = not self._predictorMaskRightEye
     return
    
   def on_tick(self, deltaT):
     lastTracked = None
     tracked = self._tracker.track()
-    # dirty implementation of game mode
-    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
     if not(tracked is None):
-      if not isGameMode:
-        self._currentMode.accept(tracked)
+      self._currentMode.on_sample(tracked)
       
       if not(self._cameraView is None):
         WH = self._cameraView[1] - self._cameraView[0]
@@ -110,7 +146,7 @@ class App:
       }
       pass
     #####################
-    prediction = self._predictor(lastTracked)
+    prediction = self._predictor( self._transformTracked(lastTracked) )
     if not(prediction is None):
       self._lastPrediction = prediction
       pred = prediction[0]
@@ -127,61 +163,70 @@ class App:
         np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
         0.0, 1.0
       )
-      if isGameMode:
-        self._currentMode.play(predPos, None)
+      self._currentMode.on_prediction(predPos, lastTracked)
     #####################
+    self._background.on_tick(deltaT)
     self._currentMode.on_tick(deltaT)
-    self._illumination.on_tick(deltaT)
+    if self._enableIllumination:
+      self._illumination.on_tick(deltaT)
     return
     
-  def on_render(self):
+  def on_render(self, fps=0.0):
     window = self._display_surf
-    # dirty implementation of game mode
-    isGameMode = isinstance(self._currentMode, AppModes.CGameMode)
-    if isGameMode:
-      clr = Colors.SILVER
-      window.fill(clr)
-    else:
-      # take color from Colors.asList based on current time, change every 5 seconds
-      clr = Colors.asList[int(time.time() / 5) % len(Colors.asList)]
-      clr = Colors.SILVER
-      window.fill(clr)
+    self._background.on_render(window)
+    
+    if self._enableIllumination:
       self._illumination.on_render(window)
-      pass
 
     if not(self._cameraSurface is None): # render camera surface
       window.blit(self._cameraSurface, self._cameraView)
     
     self._currentMode.on_render(window)
+    if self._currentMode.paused:
+      wh = np.array(window.get_size())
+      txt = 'Collection paused'
+      self.drawText(txt, wh // 2, Colors.RED, scale=2.0, center=True)
+      
     self._renderPredictions()
     
-    self.drawText('Samples: %d' % (self._dataset.totalSamples, ), (5, 95), Colors.RED)
+    self._renderInfo(fps=fps)
     pygame.display.flip()
+    return
+  
+  def _renderInfo(self, fps):
+    self.drawText('Samples: %d' % (self._dataset.totalSamples, ), (5, 95), Colors.RED)
+    modes = []
+    if self._predictorMaskFace: modes.append('no face')
+    if self._predictorMaskLeftEye: modes.append('no left eye')
+    if self._predictorMaskRightEye: modes.append('no right eye')
+
+    if 0 < len(modes):
+      self.drawText('%s' % (', '.join(modes), ), (5, 95 + 25), Colors.GREEN)
+    
+    self.drawText('FPS: %.1f' % (fps, ), (5, 95 + 25 + 25), Colors.BLACK)
     return
 
   def _renderPredictions(self):
     window = self._display_surf
     wh = np.array(window.get_size())
+    if self._showPredictions and (0 < len(self._history)):
+      positions = np.array(self._history) * wh[None]
+      positions = positions.astype(np.int32)
+      for prevP, nextP in zip(positions[:-1], positions[1:]):
+        pygame.draw.line(window, Colors.WHITE, prevP, nextP, 2)
+        self.drawObject(tuple(nextP), R=3, color=Colors.PURPLE)
+        continue
+      self.drawObject(tuple(positions[-1]), R=5, color=Colors.RED)
+
+      sp = np.multiply(self._smoothedPrediction, wh).astype(np.int32)
+      self.drawObject(tuple(sp), R=5, color=Colors.BLACK)
+
+      self.drawText(str(positions), (5, 5), Colors.BLACK)
+      pass
+
     if not(self._lastPrediction is None):
       predicted, data, info = self._lastPrediction
-      positions = predicted['coords']
-      positions = self._history
-      positions = np.array(positions) * wh[None]
-      positions = positions.astype(np.int32)
-      
-      if self._showPredictions:
-        for prevP, nextP in zip(positions[:-1], positions[1:]):
-          pygame.draw.line(window, Colors.WHITE, prevP, nextP, 2)
-          self.drawObject(tuple(nextP), R=3, color=Colors.PURPLE)
-          continue
-        self.drawObject(tuple(positions[-1]), R=5, color=Colors.RED)
-
-        sp = np.multiply(self._smoothedPrediction, wh).astype(np.int32)
-        self.drawObject(tuple(sp), R=5, color=Colors.BLACK)
-
-        self.drawText(str(positions), (5, 5), Colors.BLACK)
-        pass
-      self.drawText(str(info), (5, 35), Colors.BLACK)
+      # self.drawText(str(info), (5, 35), Colors.BLACK)
       pass
     return
    
@@ -195,8 +240,10 @@ class App:
       for event in pygame.event.get():
         self.on_event(event)
 
-      self.on_tick((pygame.time.get_ticks() - T) / 1000)
-      self.on_render()
+      TMs = (pygame.time.get_ticks() - T) / 1000.0
+      fps = 1.0 / TMs if 0.0 < TMs else 0.0
+      self.on_tick(TMs)
+      self.on_render(fps=fps)
       T = pygame.time.get_ticks()
       clock.tick(self._fps)
       continue
@@ -204,46 +251,66 @@ class App:
     pygame.quit()
     return
 
-  def drawText(self, text, pos, color):
-    self._display_surf.blit(
-      self._font.render(text, False, color),
-      pos
-    )
+  def drawText(self, text, pos, color, scale=1.0, center=False):
+    textSurface = self._font.render(text, False, color)
+    if 1.0 != scale:
+      textSurface = pygame.transform.scale(
+        textSurface, 
+        (int(textSurface.get_width() * scale), int(textSurface.get_height() * scale))
+      )
+
+    if center:
+      pos = np.subtract(pos, np.divide(textSurface.get_size(), 2))
+    
+    pos = tuple(int(x) for x in pos)
+    self._display_surf.blit(textSurface, pos)
     return
 
   def drawObject(self, pos, R=10, color=Colors.WHITE):
-    # if white - draw circle with black border
-    if np.all(np.equal(color, Colors.WHITE)):
-      pygame.draw.circle(self._display_surf, Colors.BLACK, pos, R + 4, 0)
-      pygame.draw.circle(self._display_surf, Colors.RED, pos, R + 2, 0)
-      
+    # if white - draw target
+    if np.all(np.equal(color, Colors.WHITE)): return self.drawTarget(pos, R=R)
+    
     pygame.draw.circle(self._display_surf, color, pos, R, 0)
     return
 
-def modeA(folder):
-  model = CDemoModel(trainable=not True, timesteps=5, weights=dict(folder=folder, postfix='latest'))
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), model.timesteps) as dataset:
-    with CLearnablePredictor(dataset, model=model) as predictor:
-      app = App(tracker, dataset, predictor=predictor.async_infer)
+  def drawTarget(self, pos, R=10):
+    T = int(time.time())
+    surf = self._display_surf
+    colors = Colors.asList
+    for i in reversed(range(2, R, 2)):
+      color = colors[(i * 7 + T) % len(colors)]
+      pygame.draw.circle(surf, color, pos, i, 0)
+      continue
+    return
+
+def _modelFromArgs(args):
+  if 'none' == args.model.lower(): return None
+  return CDemoModel(
+    trainable=False, 
+    timesteps=args.steps, 
+    weights=dict(folder=args.folder, postfix=args.model)
+  )
+
+def _predictorFromArgs(args):
+  model = _modelFromArgs(args)
+  if model is None: return CDummyPredictor()
+  return CLearnablePredictor(model=model, fps=args.fps)
+
+def main(args):
+  folder = args.folder
+  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), args.steps) as dataset:
+    with _predictorFromArgs(args) as predictor:
+      app = App(tracker, dataset, predictor=predictor.async_infer, fps=args.fps, hasPredictions=predictor.canPredict)
       app.run()
-      model.save(folder)
-      pass
     pass
-  return
-
-# just collect data, no learning or prediction to save computational resources
-def runDataCollection(folder, stepsN=5):
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), stepsN) as dataset:
-    app = App(tracker, dataset, predictor=lambda *x: None)
-    app.run()
-    pass
-  return
-
-def main():
-  folder = os.path.join(os.path.dirname(__file__), 'Data')
-  modeA(folder)
-  # runDataCollection(folder)
   return
 
 if __name__ == '__main__':
-  main()
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--folder', type=str, default=os.path.join(os.path.dirname(__file__), 'Data'))
+  parser.add_argument('--steps', type=int, default=5)
+  # if 'none' - no model will be used
+  parser.add_argument('--model', type=str, default='best')
+  parser.add_argument('--fps', type=int, default=30)
+  main(parser.parse_args())
+  pass

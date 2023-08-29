@@ -5,13 +5,7 @@ from Core.CDataSampler import CDataSampler
 import numpy as np
 
 class CDatasetLoader:
-  def __init__(self,
-    folderOrFile, batch_size, batchPerEpoch,
-    samplerArgs
-  ):
-    self.batch_size = batch_size
-    self._batchPerEpoch = batchPerEpoch
-    
+  def __init__(self, folderOrFile, samplerArgs):
     self._dataset = CDataSampler(
       CSamplesStorage(),
       **samplerArgs
@@ -20,21 +14,22 @@ class CDatasetLoader:
       self._dataset.addBlock(np.load(folderOrFile))
     else:
       self._dataset.addBlock(Utils.datasetFrom(folderOrFile))
-    self.on_epoch_end()
+    return
+  
+  def on_epoch_start(self):
+    self._dataset.reset()
     return
   
   def on_epoch_end(self):
     return
 
   def __len__(self):
-    return self._batchPerEpoch
+    return len(self._dataset)
   
   def __getitem__(self, idx):
-    return self._dataset.sample(self.batch_size)
+    return self._dataset.sample()
   
   def sample(self, **kwargs):
-    if not('N' in kwargs):
-      kwargs['N'] = self.batch_size
     return self._dataset.sample(**kwargs)
 
   @property

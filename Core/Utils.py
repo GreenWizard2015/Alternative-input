@@ -18,9 +18,10 @@ def setupGPU(memory_limit=None):
   if memory_limit and not isColab():
     import tensorflow as tf
     gpus = tf.config.experimental.list_physical_devices('GPU')
-    tf.config.experimental.set_virtual_device_configuration(
-      gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
-    )
+    for gpu in gpus:
+      tf.config.experimental.set_virtual_device_configuration(
+        gpu, [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+      )
     pass
   
   # https://github.com/tensorflow/tensorflow/issues/51818#issuecomment-923274891
@@ -187,8 +188,9 @@ for k, pairs in FACE_PARTS_CONNECTIONS.items():
       INDEX_TO_PART[i] = k
       PART_TO_INDECES[k].add(i)
 ###################################
+FACE_MESH_INVALID_VALUE = -100.0
 def decodeLandmarks(landmarks, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
-  points = np.full((468, 2), fill_value=-1, dtype=np.float32)
+  points = np.full((468, 2), fill_value=FACE_MESH_INVALID_VALUE, dtype=np.float32)
   for idx, mark in enumerate(landmarks.landmark):
     if (
       (mark.HasField('visibility') and (mark.visibility < VISIBILITY_THRESHOLD)) or
@@ -253,4 +255,43 @@ def datasetFrom(folder):
   if not all(x == i for i, x in enumerate(byTime)):
     res = {k: v[byTime] for k, v in res.items()}
     pass
+  return res
+
+def extractSessions(dataset, TDelta):
+  '''
+    Args:
+      dataset: dataset
+      TDelta: time delta in seconds
+      
+    Returns:
+      list of (start, end+1) tuples where start and end are indices of the dataset
+  '''
+  res = []
+  T = 0
+  prevSession = 0
+  for i, t in enumerate(dataset['time']):
+    if TDelta < (t - T):
+      if 1 < (i - prevSession):
+        res.append((prevSession, i))
+      prevSession = i
+      pass
+    T = t
+    continue
+  # if last session is not empty, then append it
+  if prevSession < len(dataset['time']):
+    res.append((prevSession, len(dataset['time'])))
+    pass
+
+  # check that end of one session is equal or less than start of the next
+  for i in range(1, len(res)):
+    assert res[i-1][1] <= res[i][0]
+    continue
+  return res
+
+def countSamplesIn(folder):
+  res = 0
+  for fn in glob.iglob(os.path.join(folder, '*.npz')):
+    with np.load(fn) as data:
+      res += len(data['time'])
+    continue
   return res

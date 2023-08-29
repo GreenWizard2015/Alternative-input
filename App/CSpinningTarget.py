@@ -17,8 +17,9 @@ class CSpinningTarget:
     self._pos = wheelPos
 
     T = (self._T / self._TScale) % (2 * np.pi)
-    self._radius = 0.001 + np.cos(T) * 0.015
-    self._angle = (self._angle + .1) % (2 * np.pi)
+    self._radius = np.clip(np.cos(T) * 0.015, 0.0, a_max=None)
+    self._radius = 0.0 # disable radius
+    self._angle = (self._angle + 0.1) % (2 * np.pi)
     ###############
     wh = self._app.WH
     mainPos = np.multiply(wh, self._pos)
@@ -41,11 +42,7 @@ class CSpinningTarget:
       continue
     
     pos = mainPos + rotate(vec, self._angle)
-    self._app.drawObject(
-      tuple(int(x) for x in pos), 
-      color=Colors.WHITE,
-      R=N + 4
-    )
+    self._app.drawTarget(tuple(int(x) for x in pos), R=N + 4)
     
     clp = np.clip(pos, 0, wh)
     if not np.allclose(clp, pos):

@@ -37,6 +37,7 @@ class IntermediatePredictor(tf.keras.layers.Layer):
     x = 0.5 + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
     tf.assert_equal(tf.shape(x), (B, N, 2))
     return x
+# End of IntermediatePredictor
 ################################################################
 
 def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
@@ -52,8 +53,10 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
     FaceMeshEncoder(latentSize), name='FaceMesh'
   )([points, context])
 
-  combined = L.Concatenate(-1)([encodedP, encoded, context])
-  combined = sMLP(sizes=[256, latentSize], activation='relu')(combined)
+  combined = CResidualMultiplicativeLayer()([
+    encodedP,
+    sMLP(sizes=[latentSize] * 1, activation='relu')(L.Concatenate(-1)([encoded, encodedP, context]))
+  ])
   
   inputs = {
     'points': points,
@@ -62,13 +65,15 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
     'context': context,
   }
   
-  # IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
-  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   return tf.keras.Model(
     inputs=inputs,
     outputs={
       'latent': combined,
-      'intermediate': []#IP(x) for x in [encodedP, encodedL, encodedR, combined]],
+      'intermediate': {
+        'F2S/encEyes': encoded,
+        'F2S/encFace': encodedP,
+        'F2S/combined': combined,
+      }
     }
   )
 
@@ -78,46 +83,34 @@ def Step2LatentModel(latentSize, contextSize):
   T = L.Input((None, 1))
 
   stepsData = stepsDataInput
-  intermediate = []
+  intermediate = {}
   
   encodedT = CTimeEncoderLayer()(T)
-  temporal = sMLP(sizes=[latentSize, latentSize], activation='relu')(
+  temporal = sMLP(sizes=[latentSize] * 3, activation='relu')(
     L.Concatenate(-1)([stepsData, encodedT, context])
   )
-  intermediate.append(temporal) # aux output per time step
+  temporal = CResidualMultiplicativeLayer()([stepsData, temporal])
+  intermediate['S2L/enc0'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-  useLSTM = not True
-  if useLSTM:
-    temp = L.LSTM(128, return_sequences=True)(temporal)
-    for i in range(2):
-      temp = L.LSTM(temp.shape[-1], return_sequences=True)(temp)
-    temp = sMLP(sizes=[temp.shape[-1], temporal.shape[-1]], activation='relu')(temp)
-    temporal = temporal + CGate(axis=[-1])(temp)
-    intermediate.append(temporal)
-  else:
-    for i in range(3):
-      temporal = CMyTransformerLayer(
-        latentSize, 32,
-        # toQuery=sMLP(sizes=[64, latentSize], activation='relu'),
-        # toKey=sMLP(sizes=[64, latentSize], activation='relu'),
-        useNormalization=True,
-      )(temporal)
-      intermediate.append(temporal)
-      continue
+  # simple LSTM to capture temporal dependencies
+  temp = L.LSTM(128, return_sequences=True)(temporal)
+  for i in range(2):
+    temp = L.LSTM(temp.shape[-1], return_sequences=True)(temp)
+  temp = sMLP(sizes=[latentSize] * 3, activation='relu')(
+      L.Concatenate(-1)([temporal, context, encodedT, temp])
+  )
+  temporal = CResidualMultiplicativeLayer()([temporal, temp])
+  intermediate['S2L/ResLSTM'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-  
-  latent = temporal
-#   IP = IntermediatePredictor() # same IntermediatePredictor for all outputs
-  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
-  intermediate = [intermediate[i] for i in [0, -1]]
-  intermediate = [IP(x) for x in intermediate]
-  result = intermediate[-1] #sum(intermediate) / len(intermediate)
+  latent = sMLP(sizes=[latentSize] * 3, activation='relu')(
+    L.Concatenate(-1)([temporal, stepsData, encodedT, context, encodedT])
+  )
+  latent = CResidualMultiplicativeLayer()([stepsData, latent])
   return tf.keras.Model(
     inputs=[stepsDataInput, T, context],
     outputs={
       'latent': latent,
-      'intermediate': intermediate,
-      'result': result
+      'intermediate': intermediate
     }
   )
 
@@ -149,7 +142,12 @@ def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, context
   
   res = Step2Latent([stepsData['latent'], T, ctx])
   res['context'] = ctx
-  res['intermediate'] = stepsData['intermediate'] + res['intermediate']
+  res['intermediate'] = {
+    **stepsData['intermediate'],
+    **res['intermediate'],
+  }
+  # drop all intermediate outputs
+  res['intermediate'] = {}
 
   inputs = {
     'points': points,
@@ -169,71 +167,18 @@ def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, context
     inputs['ContextID'] = ContextID
     pass
 
+  intermediate = res['intermediate']
+  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
+  res['intermediate'] = {k: IP(x) for k, x in intermediate.items()}
+  res['result'] = IP(res['latent'])
+
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
     'main': main,
     'Face2Step': Face2Step,
     'Step2Latent': Step2Latent
   }
-
-def simpleModel(FACE_LATENT_SIZE=None):
-  latentFace = L.Input((FACE_LATENT_SIZE, ))
-  pos = L.Input((2, ))
-
-  latent = sMLP(sizes=[256,]*4, activation='relu')(
-    L.Concatenate(-1)([
-      latentFace, 
-      CCoordsEncodingLayer(32)(pos[:, None])[:, 0]
-    ])
-  )
-  return tf.keras.Model(
-    inputs=[latentFace, pos],
-    outputs={
-      'coords': .5 + CDecodePoint(16)(latent)
-    }
-  )
-
-def ARModel(FACE_LATENT_SIZE=None, residualPos=False):
-  latentFace = L.Input((FACE_LATENT_SIZE, ))
-  position = L.Input((2, ))
-  pos = L.Reshape((1, 2))(position)
-  POS_FREQ_N = 32
   
-  combined = L.Concatenate(axis=-1)([
-    L.Flatten()(CCoordsEncodingLayer(POS_FREQ_N, name='posA')(pos)),
-    L.Dropout(0.05)(latentFace)
-  ])
-  
-  latent = sMLP(sizes=[64*4, ] * 4)(combined)
-  #############
-  combined = L.Concatenate(axis=-1)([
-    L.Flatten()(CCoordsEncodingLayer(POS_FREQ_N, name='posB')(pos)), 
-    latent,
-    L.Dropout(0.01)(latentFace)
-  ])
-
-  coords = L.Dense(2 * 16, activation='linear')(
-    sMLP(sizes=[64*4, ] * 4, activation='relu')(
-      combined
-    )
-  )
-  # coords = tf.nn.sigmoid(coords)
-  # coords = tf.clip_by_value(coords, 0.0, 1.0)
-  coords = L.Reshape((2, -1))(coords)
-   
-  P = -1.0 * np.arange(coords.shape[-1])
-  coords = CDecodeSeries(base=2.0, powers=P)(coords)
-  
-  if residualPos:
-    coords = position + coords
-  #############
-  return tf.keras.Model(
-    inputs=[latentFace, position],
-    outputs={
-      'coords': coords,
-    }
-  )
-
 if __name__ == '__main__':
   X = Face2LatentModel(steps=5, latentSize=64, contexts=None)
   X['main'].summary(expand_nested=True)

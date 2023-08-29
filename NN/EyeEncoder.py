@@ -2,7 +2,7 @@ import tensorflow as tf
 import tensorflow.keras.layers as L
 
 import numpy as np
-from NN.Utils import sMLP, CConvPE
+from NN.Utils import sMLP, CConvPE, CResidualMultiplicativeLayer
 
 def eyeEncoderConv(shape, name, latentSize):
   eye = L.Input(shape)
@@ -11,19 +11,26 @@ def eyeEncoderConv(shape, name, latentSize):
   features = []
   for sz in [64, 64, 64, 64]:
     res = L.Conv2D(sz, 3, strides=2, padding='same', activation='relu')(res)
-    # res = CConvPE(channels=3, activation='tanh')(res)
-    for _ in range(3):
+    for _ in range(2):
       res = L.Conv2D(sz, 3, padding='same', activation='relu')(res)
 
+    feats = res
+    for _ in range(1):
+      feats = L.Conv2D(8, 3, padding='same', activation='relu')(feats)
     features.append(
-      L.Conv2D(1, 3, padding='same', activation='relu')(
-        res
-      )
+      L.Conv2D(4, 3, padding='same', activation='relu')(feats)
     )
     continue
   
-  res = L.Concatenate(-1)([L.Flatten()(x) for x in features])
-  res = L.Dense(latentSize, activation='relu')(res)
+  features = features[::-1]
+  res, *features = features
+  res = sMLP(sizes=[latentSize] * 2, activation='relu', name='EEnc/MLP-start')(L.Flatten()(res))
+  for i, x in enumerate(features):
+    cond = L.Concatenate(-1)([res, L.Flatten()(x)])
+    cond = sMLP(sizes=[latentSize] * 1, activation='relu', name='EEnc/MLP-%d' % i)(cond)
+    res = CResidualMultiplicativeLayer(name='EEnc/Residual-%d' % i)([res, cond])
+    continue
+ 
   model = tf.keras.Model(
     inputs=[eye],
     outputs=[res],
@@ -60,5 +67,5 @@ class CEyeEncoder(tf.keras.Model):
     ctx = self.ctx_mlp(context)
     return self.out_mlp(tf.concat([encoded, ctx], -1))
 
-def eyeEncoder(shape=(32, 32, 1), latentSize=64):
+def eyeEncoder(latentSize=64):
   return CEyeEncoder(latent_size=latentSize, name='eyeEncoder')
