@@ -55,7 +55,7 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
 
   combined = CResidualMultiplicativeLayer()([
     encodedP,
-    sMLP(sizes=[latentSize] * 1, activation='relu')(L.Concatenate(-1)([encoded, encodedP, context]))
+    sMLP(sizes=[latentSize] * 1, activation='relu')(L.Concatenate(-1)([encodedP, encoded, context]))
   ])
   
   inputs = {
@@ -97,13 +97,13 @@ def Step2LatentModel(latentSize, contextSize):
   for i in range(2):
     temp = L.LSTM(temp.shape[-1], return_sequences=True)(temp)
   temp = sMLP(sizes=[latentSize] * 3, activation='relu')(
-      L.Concatenate(-1)([temporal, context, encodedT, temp])
+    L.Concatenate(-1)([temporal, context, encodedT, temp])
   )
   temporal = CResidualMultiplicativeLayer()([temporal, temp])
   intermediate['S2L/ResLSTM'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   latent = sMLP(sizes=[latentSize] * 3, activation='relu')(
-    L.Concatenate(-1)([temporal, stepsData, encodedT, context, encodedT])
+    L.Concatenate(-1)([stepsData, temporal, encodedT, context, encodedT])
   )
   latent = CResidualMultiplicativeLayer()([stepsData, latent])
   return tf.keras.Model(

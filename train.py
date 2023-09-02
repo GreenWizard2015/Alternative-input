@@ -111,7 +111,7 @@ def main(args):
       minFrames=timesteps,
       defaults=dict(
         timesteps=timesteps,
-        stepsSampling={'max frames': 5, 'include last': True},
+        stepsSampling={'max frames': 5},
         # augmentations
         pointsDropout=0.0, pointsNoise=0.01,
         eyesDropout=0.0, eyesAdditiveNoise=0.01, brightnessFactor=1.0, lightBlobFactor=1.0,

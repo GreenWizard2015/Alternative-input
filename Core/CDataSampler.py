@@ -105,7 +105,7 @@ class CDataSampler:
     T -= T[0]
     diff = np.diff(T, 1)
     idx = np.nonzero(diff)[0]
-    if len(idx) < 2: return None # all frames have the same time
+    if len(idx) < 1: return None # all frames have the same time
     if len(diff) == len(idx):
       T = diff
     else:
@@ -129,10 +129,6 @@ class CDataSampler:
     if isinstance(stepsSampling, dict):
       candidates = list(samples)
       maxFrames = stepsSampling['max frames']
-      shift = 1
-      if stepsSampling.get('include last', True):
-        candidates.append(mainInd)
-        shift = 0
       candidates = candidates[::-1]
       samples = []
       left = steps - 1
@@ -140,7 +136,7 @@ class CDataSampler:
         avl = min((maxFrames, 1 + len(candidates) - left))
         ind = random.randint(0, avl - 1)
         samples.append(candidates[ind])
-        candidates = candidates[ind+shift:]
+        candidates = candidates[ind+1:]
         left -= 1
         continue
       pass
@@ -150,7 +146,7 @@ class CDataSampler:
     return res
   
   def _stepsFor(self, mainInd, steps, stepsSampling='uniform', **_):
-    if (steps is None) or (1 == steps): return [mainInd]
+    if (steps is None) or (1 == steps): return [(mainInd, 0.0)]
     if mainInd < steps: return False
     
     samples, _ = self._trajectory(mainInd)
@@ -284,65 +280,3 @@ if __name__ == '__main__':
   dsBlock = Utils.datasetFrom(os.path.join(folder, 'Data', 'Dataset'))
   ds.addBlock(dsBlock)
   exit(0)
-
-  import matplotlib.pyplot as plt
-  data = ds._getShifts(512)
-  plt.scatter(data[:, 0], data[:, 1], .3)
-  plt.axis('equal')
-  plt.show()
-  exit(0)
-
-  # blankLeft = np.all(dsBlock['left eye'] < 0.1*255, axis=(1, 2))
-  # blankRight = np.all(dsBlock['right eye'] < 0.1*255, axis=(1, 2))
-  # print('Blank left', blankLeft.sum())
-  # print('Blank right', blankRight.sum())
-  # both = np.logical_and(blankLeft, blankRight)
-  # print('Both', both.sum())
-  # exit(0)
-
-  xy = ds.sample(
-    4, timesteps=5, 
-    stepsSampling={'max frames': 5, 'include last': True},
-    forecast=dict(
-      past=True, future=True, maxT=2.,
-      keypoints=128
-    ),
-    shiftsN=10,
-  )
-  xy = ds.sample(
-    4, timesteps=5, 
-    stepsSampling={'max frames': 5, 'include last': True},
-    forecast=dict(
-      past=True, future=True, maxT=2.,
-      keypoints=128
-    ),
-    shiftsN=10,
-  )
-  for v in xy[:1]:
-    for k, x in v['clean'].items():
-      print(k, x.shape)
-    print('........')
-  print(xy[1][0].shape)
-  print(xy[0]['clean']['ContextID'])
-  exit(0)
-
-  import cv2
-  def show(x, nm):
-    leftEye = x['left eye'][0, -1].numpy()
-    rightEye = x['right eye'][0, -1].numpy()
-    combined = np.concatenate([leftEye, rightEye], axis=1)
-    # upscale x8
-    combined = cv2.resize(combined, (0, 0), fx=8, fy=8, interpolation=cv2.INTER_NEAREST)
-    cv2.imshow(nm, combined)
-    return
-
-  data, _ = ds.sampleById(96, timesteps=5)
-  show(data['clean'], 'clean')
-  show(data['augmented'], 'augmented 1')
-  for i in range(1, 4):
-    data, _ = ds.sampleById(96, timesteps=5)
-    show(data['augmented'], 'augmented %d' % (i + 1))
-    continue
-  
-  cv2.waitKey(0)
-  pass

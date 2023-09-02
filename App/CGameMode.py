@@ -62,6 +62,7 @@ class CGameMode(CAppMode):
     # second circle
     R = np.multiply(wh, self._currentRadius).min().astype(np.int32)
     clr = Colors.RED if self._hits == 0 else Colors.GREEN
+    R = 25 # fixed radius
     pygame.draw.circle(window, clr, pos, int(R), width=1)
 
     # score at the top center

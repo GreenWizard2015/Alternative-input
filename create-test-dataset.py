@@ -3,10 +3,10 @@
 import numpy as np
 import os
 import Core.Utils as Utils
-Utils.setupGPU(memory_limit=1024)
 from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 from collections import defaultdict
+import argparse
 
 BATCH_SIZE = 128 * 4
 folder = os.path.dirname(__file__)
@@ -82,10 +82,10 @@ def generateTestDataset(params, outputFolder):
   print('Done')
   return
 
-if __name__ == '__main__':
-  augm = lambda x: dict(timesteps=5, stepsSampling={'max frames': x, 'include last': True})
+def main(args):
+  augm = lambda x: dict(timesteps=args.steps, stepsSampling={'max frames': x})
   PARAMS = [
-    dict(timesteps=5, stepsSampling='last'),
+    dict(timesteps=args.steps, stepsSampling='last'),
     # augm(3), augm(4), augm(5),
   ]
 
@@ -93,4 +93,14 @@ if __name__ == '__main__':
     outputFolder = os.path.join(folder, 'test-%d' % i)
     generateTestDataset(params, outputFolder)
     continue
+  return
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--steps', type=int, default=5, help='Number of timesteps')
+  parser.add_argument('--batch-size', type=int, default=512, help='Batch size of the test dataset')
+
+  args = parser.parse_args()
+  BATCH_SIZE = args.batch_size # TODO: fix this hack
+  main(args)
   pass
