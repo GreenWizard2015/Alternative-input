@@ -26,8 +26,9 @@ def eyeEncoderConv(shape, name, latentSize):
   res, *features = features
   res = sMLP(sizes=[latentSize] * 2, activation='relu', name='EEnc/MLP-start')(L.Flatten()(res))
   for i, x in enumerate(features):
-    cond = L.Concatenate(-1)([res, L.Flatten()(x)])
-    cond = sMLP(sizes=[latentSize] * 1, activation='relu', name='EEnc/MLP-%d' % i)(cond)
+    cond = sMLP(sizes=[latentSize] * 1, activation='relu', name='EEnc/MLP-%d' % i)(
+      L.Concatenate(-1)([res, L.Flatten()(x)])
+    )
     res = CResidualMultiplicativeLayer(name='EEnc/Residual-%d' % i)([res, cond])
     continue
  
