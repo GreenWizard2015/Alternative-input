@@ -12,7 +12,7 @@
 import numpy as np
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CLearnablePredictor import CLearnablePredictor
-from Core.CDemoModel import CDemoModel
+from Core.CModelWrapper import CModelWrapper
 import os
 import time
 import keyboard
@@ -103,7 +103,7 @@ class App:
 def main(args):
   folder = os.path.dirname(__file__)
   folder = os.path.join(folder, 'Data')
-  model = CDemoModel(timesteps=5, weights=dict(folder=folder, postfix=args.model), trainable=False)
+  model = CModelWrapper(timesteps=5, weights=dict(folder=folder, postfix=args.model))
    
   with CThreadedEyeTracker(fps=args.fps) as tracker:
     with CLearnablePredictor(model=model, fps=args.fps) as predictor:

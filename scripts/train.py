@@ -11,7 +11,7 @@ from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
-from Core.CDemoModel import CDemoModel
+from Core.CModelTrainer import CModelTrainer
 import tqdm
 
 import matplotlib.pyplot as plt
@@ -121,11 +121,11 @@ def main(args):
       ),
     )
   )
-  model = dict(timesteps=timesteps, trainable=True)
+  model = dict(timesteps=timesteps)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model)
 
-  model = CDemoModel(**model)
+  model = CModelTrainer(**model)
   model._model.summary()
 
   evalDatasets = [

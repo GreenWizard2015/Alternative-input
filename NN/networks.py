@@ -1,14 +1,12 @@
-import Core.Utils as Utils
-Utils.setupGPU(memory_limit=1024)
+from Core.Utils import setupGPU
+setupGPU() # dirty hack to setup GPU memory limit on startup
 
 import tensorflow as tf
 import tensorflow.keras.layers as L
-
 from NN.CCoordsEncodingLayer import CCoordsEncodingLayer
 from NN.Utils import *
 from NN.EyeEncoder import eyeEncoder
 from NN.FaceMeshEncoder import FaceMeshEncoder
-
 import numpy as np
 
 class CTimeEncoderLayer(tf.keras.layers.Layer):
@@ -114,6 +112,14 @@ def Step2LatentModel(latentSize, contextSize):
     }
   )
 
+def _InputSpec():
+  return {
+    'points': tf.TensorSpec(shape=(None, None, 468, 2), dtype=tf.float32),
+    'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
+  }
+
 def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, contexts=[1, 1, 1]):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
@@ -176,7 +182,8 @@ def Face2LatentModel(pointsN=468, eyeSize=32, steps=None, latentSize=64, context
   return {
     'main': main,
     'Face2Step': Face2Step,
-    'Step2Latent': Step2Latent
+    'Step2Latent': Step2Latent,
+    'inputs specification': _InputSpec(),
   }
   
 if __name__ == '__main__':

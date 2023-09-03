@@ -1,8 +1,5 @@
-import math
 import numpy as np
 from collections import defaultdict
-import cv2
-import random
 import os
 import glob
 
@@ -13,16 +10,21 @@ def isColab():
   except:
     pass
   return False
-  
-def setupGPU(memory_limit=None):
-  if memory_limit and not isColab():
-    import tensorflow as tf
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    for gpu in gpus:
-      tf.config.experimental.set_virtual_device_configuration(
-        gpu, [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
-      )
-    pass
+
+def setGPUMemoryLimit(limit):
+  import tensorflow as tf
+  for gpu in tf.config.experimental.list_physical_devices('GPU'):
+    tf.config.experimental.set_virtual_device_configuration(
+      gpu,
+      [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=limit)]
+    )
+    continue
+  print('GPU memory limit set to %d MB' % limit)
+  return
+
+def setupGPU():
+  memory_limit = os.environ.get('TF_MEMORY_ALLOCATION_IN_MB', None)
+  if memory_limit is not None: setGPUMemoryLimit(int(memory_limit))
   
   # https://github.com/tensorflow/tensorflow/issues/51818#issuecomment-923274891
   try:

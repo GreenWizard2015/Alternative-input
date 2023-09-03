@@ -8,7 +8,7 @@ from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
 from Core.CDummyPredictor import CDummyPredictor
-from Core.CDemoModel import CDemoModel
+from Core.CModelWrapper import CModelWrapper
 from Core.Utils import FACE_MESH_INVALID_VALUE
 import os, time
 from App.Utils import Colors
@@ -286,8 +286,7 @@ class App:
 
 def _modelFromArgs(args):
   if 'none' == args.model.lower(): return None
-  return CDemoModel(
-    trainable=False, 
+  return CModelWrapper(
     timesteps=args.steps, 
     weights=dict(folder=args.folder, postfix=args.model)
   )
