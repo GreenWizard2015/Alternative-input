@@ -150,9 +150,11 @@ class App:
     if not(prediction is None):
       self._lastPrediction = prediction
       pred = prediction[0]
+      predPos = pred['coords']
 
-      self._history.append(pred['coords'])
+      self._history.append(predPos)
       self._history = self._history[-15:]
+      self._currentMode.on_prediction(predPos, lastTracked)
       pass
     #####################
     if self._lastPrediction:
@@ -163,7 +165,6 @@ class App:
         np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
         0.0, 1.0
       )
-      self._currentMode.on_prediction(predPos, lastTracked)
     #####################
     self._background.on_tick(deltaT)
     self._currentMode.on_tick(deltaT)
