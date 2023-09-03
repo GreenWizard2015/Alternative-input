@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
 # TODO: add the W&B integration
+import argparse, os, sys
+# add the root folder of the project to the path
+ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
+sys.path.append(ROOT_FOLDER)
+
 import numpy as np
 from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestLoader import CTestLoader
-import os, argparse
 from collections import defaultdict
 import time
 from Core.CDemoModel import CDemoModel
@@ -101,8 +105,7 @@ def main(args):
   timesteps = args.steps
   # setup numpy printing options for debugging
   np.set_printoptions(precision=4, threshold=7777, suppress=True, linewidth=120)
-  folder = os.path.dirname(__file__)
-  folder = os.path.join(folder, 'Data')
+  folder = os.path.join(args.folder, 'Data')
 
   trainDataset = CDatasetLoader(
     os.path.join(folder, 'train.npz'),
@@ -161,6 +164,7 @@ if __name__ == '__main__':
   parser.add_argument('--patience', type=int, default=15)
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
+  parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
 
   main(parser.parse_args())
   pass

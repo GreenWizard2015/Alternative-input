@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
+import argparse, os, sys
+# add the root folder of the project to the path
+ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
+sys.path.append(ROOT_FOLDER)
+
 import numpy as np
-import os
 import Core.Utils as Utils
 from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 from collections import defaultdict
-import argparse
 
 BATCH_SIZE = 128 * 4
-folder = os.path.dirname(__file__)
-folder = os.path.join(folder, 'Data')
+folder = os.path.join(ROOT_FOLDER, 'Data')
 
 def samplesStream(params, take):
   if not isinstance(take, list): take = [take]

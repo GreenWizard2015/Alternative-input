@@ -7,10 +7,14 @@ This script performs the following steps:
   3. Split each session into training and testing sets
   4. Save the training.npz and testing.npz files
 '''
+
+import argparse, os, sys
+# add the root folder of the project to the path
+ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
+sys.path.append(ROOT_FOLDER)
+
 import numpy as np
-import os
 import Core.Utils as Utils
-import argparse
 
 def splitSession(start, end, ratio, framesPerChunk):
   N = end - start
@@ -61,7 +65,7 @@ def main(args):
   # set random seed (I hope this is enough to make the results reproducible)
   np.random.seed(args.seed)
   ####
-  MAIN_FOLDER = os.path.join(os.path.dirname(__file__), 'Data')
+  MAIN_FOLDER = os.path.join(ROOT_FOLDER, 'Data')
   src = os.path.join(MAIN_FOLDER, 'Dataset')
   # load dataset
   dataset = Utils.datasetFrom(src)
