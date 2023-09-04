@@ -12,23 +12,27 @@ class CModelWrapper:
       self.load(**kwargs['weights'])
     return
   
+  def predict(self, data):
+    return self._model(data, training=False)['result'].numpy()
+  
   def __call__(self, data, startPos=None):
-    predictions = self._model(data, training=False)
-    points = predictions['result'][:, -1, :]
+    predictions = self.predict(data)
     return {
-      'coords': points[0].numpy(),
+      'coords': predictions[0, -1, :],
     }
 
   def _modelFilename(self, folder, postfix=''):
     postfix = '-' + postfix if postfix else ''
     return os.path.join(folder, '%s-%s%s.h5' % (self._modelID, 'model', postfix))
   
-  def save(self, folder, postfix=''):
-    self._model.save_weights(self._modelFilename(folder, postfix))
+  def save(self, folder=None, postfix='', path=None):
+    if path is None: path = self._modelFilename(folder, postfix)
+    self._model.save_weights(path)
     return
     
-  def load(self, folder, postfix=''):
-    self._model.load_weights(self._modelFilename(folder, postfix))
+  def load(self, folder=None, postfix='', path=None):
+    if path is None: path = self._modelFilename(folder, postfix)
+    self._model.load_weights(path)
     return
   
   @property

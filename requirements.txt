@@ -1,4 +1,5 @@
 tensorflow==2.7.0
+tensorflow-probability==0.15.0
 mediapipe==0.9.1.0
 numpy
 opencv-python

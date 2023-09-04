@@ -266,6 +266,9 @@ class CDataSampler:
   @property
   def totalSamples(self):
     return len(self._storage)
+  
+  def validSamples(self):
+    return list(sorted(self._samples))
 ##############
 if __name__ == '__main__':
   import tensorflow as tf
