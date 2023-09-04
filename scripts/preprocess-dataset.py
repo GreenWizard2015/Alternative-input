@@ -43,6 +43,37 @@ def splitSession(start, end, ratio, framesPerChunk):
   testing = F(testing)
   return training, testing
 
+def splitDataset(dataset, ratio, framesPerChunk, skipAction):
+  # split each session into training and testing sets
+  training = [] # list of (start, end) tuples
+  testing = [] # list of (start, end) tuples
+  for i, (start, end) in enumerate(dataset):
+    N = end - start
+    if N < 2 * framesPerChunk:
+      print('Session %d is too short. Action: %s' % (i, skipAction))
+      if 'drop' == skipAction: continue
+
+      rng = np.arange(start, end)
+      if 'train' == skipAction: training.append(rng)
+      if 'test' == skipAction: testing.append(rng)
+      continue
+    trainingIdx, testingIdx = splitSession(start, end, ratio, framesPerChunk)
+    training.append(trainingIdx)
+    testing.append(testingIdx)
+    continue
+  # save training and testing sets
+  training = np.sort(np.concatenate(training))
+  testing = np.sort(np.concatenate(testing))
+  
+  # check that training and testing sets are disjoint
+  intersection = np.intersect1d(training, testing)
+  if 0 < len(intersection):
+    print('Training and testing sets are not disjoint!')
+    print(intersection)
+    raise Exception('Training and testing sets are not disjoint!')
+
+  return training, testing
+
 def dropPadding(idx, padding):
   res = []
   # find consecutive frames chunks, save their start and end indices
@@ -79,44 +110,26 @@ def main(args):
     continue
   ######################################################
   # split each session into training and testing sets
-  ratio = 1.0 - float(args.test_ratio)
-  framesPerChunk = int(args.frames_per_chunk)
-  training = [] # list of (start, end) tuples
-  testing = [] # list of (start, end) tuples
-  for i, (start, end) in enumerate(sessions):
-    N = end - start
-    if N < 2 * framesPerChunk:
-      print('Session {} is too short, skipping'.format(i))
-      continue
-    trainingIdx, testingIdx = splitSession(start, end, ratio, framesPerChunk)
-    training.append(trainingIdx)
-    testing.append(testingIdx)
-    continue
-  # save training and testing sets
-  training = np.sort(np.concatenate(training))
-  testing = np.sort(np.concatenate(testing))
-
-  # check that training and testing sets are disjoint
-  intersection = np.intersect1d(training, testing)
-  if 0 < len(intersection):
-    print('Training and testing sets are not disjoint!')
-    print(intersection)
-    raise Exception('Training and testing sets are not disjoint!')
+  training, testing = splitDataset(
+    sessions,
+    ratio=1.0 - float(args.test_ratio),
+    framesPerChunk=int(args.frames_per_chunk),
+    skipAction=args.skipped_frames
+  )
   
   testPadding = int(args.test_padding)
   if 0 < testPadding:
     testing = dropPadding(testing, testPadding)
 
-  print('Training set: {} frames'.format(len(training)))
-  print('Testing set: {} frames'.format(len(testing)))
-
-  trainingData = {k: v[training] for k, v in dataset.items()}
-  assert np.all(np.diff(trainingData['time']) > 0), 'Time is not monotonically increasing!'
-  np.savez(os.path.join(MAIN_FOLDER, 'train.npz'), **trainingData)
-
-  testingData = {k: v[testing] for k, v in dataset.items()}
-  assert np.all(np.diff(testingData['time']) > 0), 'Time is not monotonically increasing!'
-  np.savez(os.path.join(MAIN_FOLDER, 'test.npz'), **testingData)
+  def saveSubset(filename, idx):
+    print('%s: %d frames' % (filename, len(idx)))
+    subset = {k: v[idx] for k, v in dataset.items()}
+    assert np.all(np.diff(subset['time']) > 0), 'Time is not monotonically increasing!'
+    np.savez(os.path.join(MAIN_FOLDER, filename), **subset)
+    return
+  
+  saveSubset('train.npz', training)
+  saveSubset('test.npz', testing)
   return
 
 if __name__ == '__main__':
@@ -126,6 +139,10 @@ if __name__ == '__main__':
   parser.add_argument('--frames-per-chunk', type=int, default=25, help='Number of frames per chunk')
   parser.add_argument('--test-padding', type=int, default=5, help='Number of frames to skip at the beginning/end of each session')
   parser.add_argument('--seed', type=int, default=42, help='Random seed')
+  parser.add_argument(
+    '--skipped-frames', type=str, default='train', choices=['train', 'test', 'drop'],
+    help='What to do with skipped frames ("train", "test", or "drop")'
+  )
   args = parser.parse_args()
   main(args)
   pass
