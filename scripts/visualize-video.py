@@ -102,16 +102,23 @@ def main(args):
     batch_size=args.batch_size, minFrames=args.steps
   )
   ds.addBlock( Utils.datasetFrom(args.dataset) )
+  validSamples = ds.validSamples()
+
   models = [
     CModelWrapper(timesteps=args.steps, weights=dict(path=model))
     for model in args.model
   ]
+
+  streamSettings = dict(
+    take='clean', batchSize=args.batch_size, indices=validSamples, 
+    models=models, 
+    augmentedN=args.augmented
+  )
   
-  validSamples = ds.validSamples()
   visualize = visualizer()
   with imageio.get_writer(args.output, mode='I', fps=args.fps) as writer:
     with tqdm.tqdm(total=len(validSamples)) as pbar:
-      for x, y, predicted in samplesStream(ds, take='clean', batchSize=args.batch_size, models=models, indices=validSamples):
+      for x, y, predicted in samplesStream(ds, **streamSettings):
         try:
           frame = visualize(x, y, predicted)
           writer.append_data(frame)
