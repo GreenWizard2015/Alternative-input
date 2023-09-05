@@ -107,8 +107,12 @@ def main(args):
   np.set_printoptions(precision=4, threshold=7777, suppress=True, linewidth=120)
   folder = os.path.join(args.folder, 'Data')
 
+  trainDataset = args.trainset
+  if trainDataset is None:
+    trainDataset = os.path.join(folder, 'train.npz')
+
   trainDataset = CDatasetLoader(
-    os.path.join(folder, 'train.npz'),
+    trainDataset,
     samplerArgs=dict(
       batch_size=args.batch_size,
       minFrames=timesteps,
@@ -124,6 +128,8 @@ def main(args):
   model = dict(timesteps=timesteps)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model)
+  if args.modelId is not None:
+    model['model'] = args.modelId
 
   model = CModelTrainer(**model)
   model._model.summary()
@@ -165,6 +171,8 @@ if __name__ == '__main__':
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
+  parser.add_argument('--trainset', type=str)
+  parser.add_argument('--modelId', type=str)
 
   main(parser.parse_args())
   pass

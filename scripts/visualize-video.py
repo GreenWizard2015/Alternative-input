@@ -20,7 +20,7 @@ import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-def samplesStream(ds, take, batchSize, model, indices):
+def samplesStream(ds, take, batchSize, models, indices):
   for i in range(0, len(indices), batchSize):
     batch, rejected, accepted = ds.sampleByIds(indices[i:i+batchSize])
     if batch is None: continue
@@ -28,25 +28,27 @@ def samplesStream(ds, take, batchSize, model, indices):
     # main batch
     x, (y, ) = batch
     x = x[take]
-    predictions = model.predict(x)
-    assert len(predictions) == len(y), 'The number of predictions must be equal to the number of samples'
+    predictions = [model.predict(x) for model in models]
+    # assert len(predictions) == len(y), 'The number of predictions must be equal to the number of samples'
     for idx in range(len(y)):
       res = {k: v[idx] for k, v in x.items()}
-      yield res, y[idx], predictions[idx]
+      yield res, y[idx], [pred[idx] for pred in predictions]
     continue
   return
 
 def visualizer():
   plt.figure(figsize=(10, 10))
-  def visualize(x, y, predicted):
-    predicted = predicted[-1] # take the last timestep
+  def visualize(x, y, predictions):
     y = y[-1, 0] # take the last timestep
 
     plt.clf()
     # plot the y as a green dot
     plt.plot(y[0], y[1], 'go', markersize=2)
     # plot the predicted as a red dot
-    plt.plot(predicted[0], predicted[1], 'ro', markersize=2)
+    for predicted in predictions:
+      predicted = predicted[-1] # take the last timestep
+      plt.plot(predicted[0], predicted[1], 'ro', markersize=2)
+      continue
     # plot the boundaries
     for i in range(5):
         d = i * 0.1
@@ -81,13 +83,16 @@ def main(args):
     batch_size=args.batch_size, minFrames=args.steps
   )
   ds.addBlock( Utils.datasetFrom(args.dataset) )
-  model = CModelWrapper(timesteps=args.steps, weights=dict(path=args.model))
+  models = [
+    CModelWrapper(timesteps=args.steps, weights=dict(path=model))
+    for model in args.model
+  ]
   
   validSamples = ds.validSamples()
   visualize = visualizer()
   with imageio.get_writer(args.output, mode='I', fps=args.fps) as writer:
     with tqdm.tqdm(total=len(validSamples)) as pbar:
-      for x, y, predicted in samplesStream(ds, take='clean', batchSize=args.batch_size, model=model, indices=validSamples):
+      for x, y, predicted in samplesStream(ds, take='clean', batchSize=args.batch_size, models=models, indices=validSamples):
         try:
           frame = visualize(x, y, predicted)
           writer.append_data(frame)
@@ -104,15 +109,15 @@ if __name__ == '__main__':
     '--dataset', type=str, help='Path to the dataset (folder or file)',
     default=os.path.join(ROOT_FOLDER, 'Data', 'test.npz')
   )
-  parser.add_argument(
-    '--model', type=str, help='Path to the model',
-    default=os.path.join(ROOT_FOLDER, 'Data', 'simple-model-best.h5')
-  )
+  # model is a list of models
+  parser.add_argument('--model', type=str, help='Path to the model (folder or file)', action='append', default=[])
   parser.add_argument('--steps', type=int, help='Number of timesteps', default=5)
   parser.add_argument('--batch-size', type=int, help='Batch size', default=128)
   parser.add_argument('--output', type=str, help='Output file name', default='visualize.avi')
   parser.add_argument('--fps', type=int, help='Frames per second', default=30)
 
   args = parser.parse_args()
+  if not args.model:
+    args.model = [os.path.join(ROOT_FOLDER, 'Data', 'simple-model-best.h5')]
   main(args)
   pass

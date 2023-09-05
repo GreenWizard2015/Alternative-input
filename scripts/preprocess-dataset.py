@@ -16,7 +16,7 @@ sys.path.append(ROOT_FOLDER)
 import numpy as np
 import Core.Utils as Utils
 
-def splitSession(start, end, ratio, framesPerChunk):
+def splitSession(start, end, ratio, framesPerChunk, splits):
   N = end - start
   idx = np.arange(start, end)
   # pad with -1 to make it divisible by framesPerChunk
@@ -32,47 +32,66 @@ def splitSession(start, end, ratio, framesPerChunk):
   split = int(ratio * len(chunks))
   training = chunks[:split]
   testing = chunks[split:]
+  # split training into splits
+  trainingN = len(training)
+  trainingSets = [training[i::splits] for i in range(splits)]
+  # shuffle training sets using the numpy methods
+  idx = np.arange(len(trainingSets))
+  np.random.shuffle(idx) # shuffle indices according to the seed
+  trainingSets = [trainingSets[i] for i in idx]
+  ####
   print(
-    'Session {}-{}: {} chunks, {} training, {} testing'.format(
-      start, end, len(chunks), len(training), len(testing)
+    'Session {}-{}: {} chunks, {} training{}, {} testing'.format(
+      start, end, len(chunks),
+      trainingN,
+      ' ({})'.format(', '.join([str(len(training)) for training in trainingSets])) if 1 < splits else '',
+      len(testing)
     )
   )
   # remove padding
-  F = lambda x: np.sort(x[x != -1].reshape(-1))
-  training = F(training)
-  testing = F(testing)
-  return training, testing
+  def F(x):
+    if len(x) == 0: return []
+    x = x.reshape(-1) # flatten
+    return x[x != -1] # remove padding
+  return [F(training) for training in trainingSets], F(testing)
 
-def splitDataset(dataset, ratio, framesPerChunk, skipAction):
+def splitDataset(dataset, ratio, framesPerChunk, skipAction, splits):
   # split each session into training and testing sets
-  training = [] # list of (start, end) tuples
+  trainingSets = [[] for _ in range(splits)] # list of (start, end) tuples for each split
   testing = [] # list of (start, end) tuples
   for i, (start, end) in enumerate(dataset):
-    N = end - start
-    if N < 2 * framesPerChunk:
+    trainingIdxSets = []
+    testingIdx = []
+    if (end - start) < 2 * framesPerChunk:
       print('Session %d is too short. Action: %s' % (i, skipAction))
       if 'drop' == skipAction: continue
 
       rng = np.arange(start, end)
-      if 'train' == skipAction: training.append(rng)
-      if 'test' == skipAction: testing.append(rng)
+      if 'train' == skipAction: trainingIdxSets = [rng for _ in range(splits)]
+      if 'test' == skipAction: testingIdx = rng
+    else:
+      trainingIdxSets, testingIdx = splitSession(start, end, ratio, framesPerChunk, splits=splits)
+
+    # store training and testing sets if they are not empty
+    for tIdx, trainingIdx in enumerate(trainingIdxSets):
+      if 0 < len(trainingIdx): trainingSets[tIdx].append(trainingIdx)
       continue
-    trainingIdx, testingIdx = splitSession(start, end, ratio, framesPerChunk)
-    training.append(trainingIdx)
-    testing.append(testingIdx)
+    if 0 < len(testingIdx): testing.append(testingIdx)
     continue
   # save training and testing sets
-  training = np.sort(np.concatenate(training))
   testing = np.sort(np.concatenate(testing))
+  trainingSets = [np.sort(np.concatenate(training)) for training in trainingSets]
   
   # check that training and testing sets are disjoint
-  intersection = np.intersect1d(training, testing)
-  if 0 < len(intersection):
-    print('Training and testing sets are not disjoint!')
-    print(intersection)
-    raise Exception('Training and testing sets are not disjoint!')
+  for training in trainingSets:
+    intersection = np.intersect1d(training, testing)
+    if 0 < len(intersection):
+      print('Training and testing sets are not disjoint!')
+      print(intersection)
+      raise Exception('Training and testing sets are not disjoint!')
+    continue
 
-  return training, testing
+  return trainingSets, testing
 
 def dropPadding(idx, padding):
   res = []
@@ -96,8 +115,8 @@ def main(args):
   # set random seed (I hope this is enough to make the results reproducible)
   np.random.seed(args.seed)
   ####
-  MAIN_FOLDER = os.path.join(ROOT_FOLDER, 'Data')
-  src = os.path.join(MAIN_FOLDER, 'Dataset')
+  folder = os.path.join(ROOT_FOLDER, 'Data')
+  src = os.path.join(folder, 'Dataset')
   # load dataset
   dataset = Utils.datasetFrom(src)
   # split dataset into sessions
@@ -110,11 +129,12 @@ def main(args):
     continue
   ######################################################
   # split each session into training and testing sets
-  training, testing = splitDataset(
+  trainingSets, testing = splitDataset(
     sessions,
     ratio=1.0 - float(args.test_ratio),
     framesPerChunk=int(args.frames_per_chunk),
-    skipAction=args.skipped_frames
+    skipAction=args.skipped_frames,
+    splits=int(args.splits)
   )
   
   testPadding = int(args.test_padding)
@@ -125,10 +145,17 @@ def main(args):
     print('%s: %d frames' % (filename, len(idx)))
     subset = {k: v[idx] for k, v in dataset.items()}
     assert np.all(np.diff(subset['time']) > 0), 'Time is not monotonically increasing!'
-    np.savez(os.path.join(MAIN_FOLDER, filename), **subset)
+    np.savez(os.path.join(folder, filename), **subset)
     return
   
-  saveSubset('train.npz', training)
+  # remove any train files that might be there
+  toRemove = [os.path.join(folder, f) for f in os.listdir(folder) if f.startswith('train') and f.endswith('.npz')]
+  for f in toRemove: os.remove(f)
+  
+  for i, training in enumerate(trainingSets):
+    name = 'train-%d.npz' % i if 1 < len(trainingSets) else 'train.npz'
+    saveSubset(name, training)
+    continue
   saveSubset('test.npz', testing)
   return
 
@@ -143,6 +170,7 @@ if __name__ == '__main__':
     '--skipped-frames', type=str, default='train', choices=['train', 'test', 'drop'],
     help='What to do with skipped frames ("train", "test", or "drop")'
   )
+  parser.add_argument('--splits', type=int, default=1, help='Number of splits of training set')
   args = parser.parse_args()
   main(args)
   pass
