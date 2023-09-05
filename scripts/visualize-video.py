@@ -20,7 +20,11 @@ import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-def samplesStream(ds, take, batchSize, models, indices):
+def samplesStream(ds, take, batchSize, models, indices, augmentedN):
+  augmentations = dict(
+    pointsDropout=0.0, pointsNoise=0.01,
+    eyesDropout=0.0, eyesAdditiveNoise=0.01, brightnessFactor=2.0, lightBlobFactor=2.0,
+  )
   for i in range(0, len(indices), batchSize):
     batch, rejected, accepted = ds.sampleByIds(indices[i:i+batchSize])
     if batch is None: continue
@@ -29,6 +33,15 @@ def samplesStream(ds, take, batchSize, models, indices):
     x, (y, ) = batch
     x = x[take]
     predictions = [model.predict(x) for model in models]
+    for _ in range(augmentedN):
+      augmBatch, _, augmAccepted = ds.sampleByIds(accepted, **augmentations)
+      # augmAccepted should be the same as accepted
+      if np.all(np.equal(accepted, augmAccepted)):
+        augmX, _ = augmBatch
+        augmX = augmX['augmented']
+        augmPredictions = [model.predict(augmX) for model in models]
+        predictions.extend(augmPredictions)
+      continue
     # assert len(predictions) == len(y), 'The number of predictions must be equal to the number of samples'
     for idx in range(len(y)):
       res = {k: v[idx] for k, v in x.items()}
@@ -40,15 +53,20 @@ def visualizer():
   plt.figure(figsize=(10, 10))
   def visualize(x, y, predictions):
     y = y[-1, 0] # take the last timestep
+    predictions = np.array(predictions, dtype=np.float32)[:, -1]
 
     plt.clf()
     # plot the y as a green dot
     plt.plot(y[0], y[1], 'go', markersize=2)
     # plot the predicted as a red dot
     for predicted in predictions:
-      predicted = predicted[-1] # take the last timestep
       plt.plot(predicted[0], predicted[1], 'ro', markersize=2)
       continue
+    if 1 < len(predictions):
+      # plot the mean of the predictions as a blue dot
+      mean = np.mean(predictions, axis=0)
+      plt.plot(mean[0], mean[1], 'bo', markersize=2)
+      pass
     # plot the boundaries
     for i in range(5):
         d = i * 0.1
@@ -60,9 +78,10 @@ def visualizer():
         )
     # plt.axis('equal')
     plt.axis([-0.1, 1.1, -0.1, 1.1])
-    plt.gcf().canvas.draw()
-    ncols, nrows = plt.gcf().canvas.get_width_height()
-    image = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype='uint8').reshape(nrows, ncols, 3)
+    canvas = plt.gcf().canvas
+    canvas.draw()
+    ncols, nrows = canvas.get_width_height()
+    image = np.frombuffer(canvas.tostring_rgb(), dtype='uint8').reshape(nrows, ncols, 3)
     # imageio suggests to pad the image such that the width and height are divisible by 16
     M = 16
     pad1 = M - (image.shape[0] % M)
@@ -114,7 +133,8 @@ if __name__ == '__main__':
   parser.add_argument('--steps', type=int, help='Number of timesteps', default=5)
   parser.add_argument('--batch-size', type=int, help='Batch size', default=128)
   parser.add_argument('--output', type=str, help='Output file name', default='visualize.avi')
-  parser.add_argument('--fps', type=int, help='Frames per second', default=30)
+  parser.add_argument('--fps', type=int, help='Frames per second', default=3)
+  parser.add_argument('--augmented', type=int, help='Number of augmented batches', default=0)
 
   args = parser.parse_args()
   if not args.model:
