@@ -12,6 +12,7 @@ from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
 from Core.CModelTrainer import CModelTrainer
+from Core.CModelCoTrainer import CModelCoTrainer
 import tqdm
 
 import matplotlib.pyplot as plt
@@ -103,6 +104,13 @@ def _modelTrainingLoop(model, dataset):
 
 def main(args):
   timesteps = args.steps
+
+  trainer = None
+  if args.trainer == 'standard': trainer = CModelTrainer
+  if args.trainer == 'default': trainer = CModelTrainer
+  if args.trainer == 'cotrainer': trainer = lambda **kwargs: CModelCoTrainer(useEMA=False, **kwargs)
+  if args.trainer == 'cotrainer-ema':
+    trainer = lambda **kwargs: CModelCoTrainer(useEMA=True, eta=args.ema, **kwargs)
   # setup numpy printing options for debugging
   np.set_printoptions(precision=4, threshold=7777, suppress=True, linewidth=120)
   folder = os.path.join(args.folder, 'Data')
@@ -131,7 +139,7 @@ def main(args):
   if args.modelId is not None:
     model['model'] = args.modelId
 
-  model = CModelTrainer(**model)
+  model = trainer(**model)
   model._model.summary()
 
   evalDatasets = [
@@ -173,6 +181,11 @@ if __name__ == '__main__':
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
   parser.add_argument('--trainset', type=str)
   parser.add_argument('--modelId', type=str)
+  parser.add_argument(
+    '--trainer', type=str, default='default', 
+    choices=['default', 'standard', 'cotrainer', 'cotrainer-ema']
+  )
+  parser.add_argument('--ema', type=float, default=1e-3, help='EMA coefficient for the CoTrainer')
 
   main(parser.parse_args())
   pass
