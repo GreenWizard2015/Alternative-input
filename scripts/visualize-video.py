@@ -22,7 +22,7 @@ import matplotlib.patches as patches
 
 def samplesStream(ds, take, batchSize, models, indices, augmentedN):
   augmentations = dict(
-    pointsDropout=0.0, pointsNoise=0.01,
+    pointsNoise=0.01,
     eyesDropout=0.0, eyesAdditiveNoise=0.01, brightnessFactor=2.0, lightBlobFactor=2.0,
   )
   for i in range(0, len(indices), batchSize):

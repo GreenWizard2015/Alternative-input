@@ -54,13 +54,13 @@ def addLightBlob(imgA, imgB, brightness, shared):
       tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
       tf.TensorSpec(shape=(None, 1), dtype=tf.float32),
     ),
-    tf.TensorSpec(shape=(7,), dtype=tf.float32),
+    tf.TensorSpec(shape=(6,), dtype=tf.float32),
   ]
 )
 def toTensor(data, params):
   print('Instantiate CDataSampler_utils.toTensor')
   (
-    pointsDropout, pointsNoise, 
+    pointsNoise, 
     eyesAdditiveNoise, eyesDropout,
     brightnessFactor, lightBlobFactor,
     timesteps
@@ -116,10 +116,6 @@ def toTensor(data, params):
     imgB = tf.where(tf.logical_and(mask, maskB)[:, None, None], 0.0, imgB)
   ##########################
   validPointsMask = tf.reduce_all(FACE_MESH_INVALID_VALUE != points, axis=-1, keepdims=True)
-  if 0.0 < pointsDropout:
-    mask = tf.random.uniform(tf.shape(points)[:-1])[..., None] < pointsDropout
-    points = tf.where(mask, FACE_MESH_INVALID_VALUE, points)
-  
   if 0.0 < pointsNoise:
     points += tf.random.normal(tf.shape(points), stddev=pointsNoise)
 

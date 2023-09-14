@@ -248,7 +248,6 @@ class CDataSampler:
         np.array([T for _, T in indexesAndTime], np.float32).reshape((-1, 1)),
       ),
       (
-        kwargs.get('pointsDropout', 0.0),
         kwargs.get('pointsNoise', 0.0),
       
         kwargs.get('eyesAdditiveNoise', 0.0),

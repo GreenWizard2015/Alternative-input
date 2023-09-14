@@ -41,7 +41,7 @@ if __name__ == '__main__':
   folder = os.path.dirname(__file__)
   ds = CDatasetLoader(
     os.path.join(folder, 'Dataset'), batch_size=16, 
-    pointsDropout=0.0, batchPerEpoch=1, steps=5
+    batchPerEpoch=1, steps=5
   )
   print(len(ds))
   batchX, batchY = ds[0]
