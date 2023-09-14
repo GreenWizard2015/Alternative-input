@@ -22,7 +22,7 @@ class App:
     self, tracker, dataset, predictor, 
     fps=30, showWebcam=False, hasPredictions=True, showFaceMesh=False
   ):
-    self._showFaceMesh = True
+    self._showFaceMesh = showFaceMesh
     self._faceMesh = None
     self._canPredict = hasPredictions
     self._fps = fps
