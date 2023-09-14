@@ -14,6 +14,7 @@ import time
 from Core.CModelTrainer import CModelTrainer
 from Core.CModelCoTrainer import CModelCoTrainer
 import tqdm
+import json
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -41,7 +42,7 @@ def plotPrediction(Y, predV, filename):
   plt.close()
   return
 
-def _eval(dataset, model, plotFilename):
+def _eval(dataset, model, plotFilename, args):
   T = time.time()
   # evaluate the model on the val dataset
   lossPerSample = {'loss': [], 'pos': []}
@@ -60,20 +61,20 @@ def _eval(dataset, model, plotFilename):
       continue
     continue
 
-  # plot the predictions and the ground truth
-  Y = unbatch(Y).reshape((-1, 2))
-  predV = unbatch(predV).reshape((-1, 2))
-  plotPrediction(Y, predV, plotFilename)
+  if args.debug: # plot the predictions and the ground truth
+    Y = unbatch(Y).reshape((-1, 2))
+    predV = unbatch(predV).reshape((-1, 2))
+    plotPrediction(Y, predV, plotFilename)
   
   loss = np.mean(lossPerSample['loss'])
   dist = np.mean(predDist)
   T = time.time() - T
   return loss, dist, T
 
-def evaluate(datasets, model, folder):
+def evaluate(datasets, model, folder, args):
   totalLoss = 0.0
   for i, dataset in enumerate(datasets):
-    loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i))
+    loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
     print('Test %d / %d | %.2f sec | Loss: %.5f. Distance: %.5f' % (i + 1, len(datasets), T, loss, dist))
     totalLoss += loss
     continue
@@ -81,16 +82,13 @@ def evaluate(datasets, model, folder):
   return totalLoss / len(datasets)
 
 def _modelTrainingLoop(model, dataset):
-  def F(desc, timesteps):
-    T = timesteps if callable(timesteps) else lambda: timesteps
+  def F(desc, sampleParams):
     history = defaultdict(list)
     # use the tqdm progress bar
     with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
-        stats = model.fit(dataset.sample(
-          timesteps=T()
-        ))
+        stats = model.fit(dataset.sample(**sampleParams))
         history['time'].append(stats['time'])
         for k in stats['losses'].keys():
           history[k].append(stats['losses'][k])
@@ -102,19 +100,68 @@ def _modelTrainingLoop(model, dataset):
     return
   return F
 
+def _defaultSchedule(args):
+  return lambda epoch: dict()
+
+def _schedule_from_json(args):
+  with open(args.schedule, 'r') as f:
+    schedule = json.load(f)
+
+  # schedule is a dictionary of dictionaries, where the keys are the epochs
+  # transform it into a sorted list of tuples (epoch, params)
+  for k, v in schedule.items():
+    v = [(int(epoch), p) for epoch, p in v.items()]
+    schedule[k] = sorted(v, key=lambda x: x[0])
+    continue
+
+  def F(epoch):
+    res = {}
+    for k, v in schedule.items():
+      assert isinstance(v, list), 'The schedule should be a list of parameters'
+      # find the first epoch that is less or equal to the current one
+      smallest = [i for i, (e, _) in enumerate(v) if e <= epoch]
+      if 0 == len(smallest): continue
+      smallest = smallest[-1]
+
+      startEpoch, p = v[smallest]
+      value = p
+      # p could be a dictionary or value
+      if isinstance(p, list) and (2 == len(p)):
+        assert smallest + 1 < len(v), 'The last epoch should be the last one'
+        minV, maxV = [float(x) for x in p]
+        nextEpoch, _ = v[smallest + 1]
+        # linearly interpolate between the values
+        value = minV + (maxV - minV) * (epoch - startEpoch) / (nextEpoch - startEpoch)
+        pass
+      
+      res[k] = float(value)
+      continue
+
+    if args.debug and res:
+      print('Parameters for epoch %d:' % (epoch, ))
+      for k, v in res.items():
+        print('  %s: %.5f' % (k, v))
+        continue
+    return res
+  return F
+
+def _trainer_from(args):
+  if args.trainer == 'standard': return CModelTrainer
+  if args.trainer == 'default': return CModelTrainer
+  if args.trainer == 'cotrainer': return lambda **kwargs: CModelCoTrainer(useEMA=False, **kwargs)
+  if args.trainer == 'cotrainer-ema':
+    return lambda **kwargs: CModelCoTrainer(useEMA=True, eta=args.ema, **kwargs)
+  raise Exception('Unknown trainer: %s' % (args.trainer, ))
+
 def main(args):
   timesteps = args.steps
-
-  trainer = None
-  if args.trainer == 'standard': trainer = CModelTrainer
-  if args.trainer == 'default': trainer = CModelTrainer
-  if args.trainer == 'cotrainer': trainer = lambda **kwargs: CModelCoTrainer(useEMA=False, **kwargs)
-  if args.trainer == 'cotrainer-ema':
-    trainer = lambda **kwargs: CModelCoTrainer(useEMA=True, eta=args.ema, **kwargs)
-  # setup numpy printing options for debugging
-  np.set_printoptions(precision=4, threshold=7777, suppress=True, linewidth=120)
   folder = os.path.join(args.folder, 'Data')
+  if args.schedule is None:
+    getSampleParams = _defaultSchedule(args)
+  else:
+    getSampleParams = _schedule_from_json(args)
 
+  trainer = _trainer_from(args)
   trainDataset = args.trainset
   if trainDataset is None:
     trainDataset = os.path.join(folder, 'train.npz')
@@ -127,9 +174,9 @@ def main(args):
       defaults=dict(
         timesteps=timesteps,
         stepsSampling={'max frames': 5},
-        # augmentations
-        pointsDropout=0.0, pointsNoise=0.01,
-        eyesDropout=0.0, eyesAdditiveNoise=0.01, brightnessFactor=1.0, lightBlobFactor=1.0,
+        # no augmentations by default
+        pointsNoise=0.0,
+        eyesDropout=0.0, eyesAdditiveNoise=0.0, brightnessFactor=1.0, lightBlobFactor=1.0,
       ),
     )
   )
@@ -146,17 +193,17 @@ def main(args):
     CTestLoader(os.path.join(folder, nm))
     for nm in os.listdir(folder) if nm.startswith('test-')
   ]
-  bestLoss = evaluate(evalDatasets, model, folder)
+  bestLoss = evaluate(evalDatasets, model, folder, args)
   bestEpoch = 0
   trainStep = _modelTrainingLoop(model, trainDataset)
   for epoch in range(args.epochs):
     trainStep(
       desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
-      timesteps=timesteps
+      sampleParams=getSampleParams(epoch)
     )
     model.save(folder, postfix='latest')
     
-    testLoss = evaluate(evalDatasets, model, folder)
+    testLoss = evaluate(evalDatasets, model, folder, args)
     if testLoss < bestLoss:
       print('Improved %.5f => %.5f' % (bestLoss, testLoss))
       bestLoss = testLoss
@@ -164,7 +211,7 @@ def main(args):
       model.save(folder, postfix='best')
       continue
 
-    print('Passed %d epochs since the last improvement' % (epoch - bestEpoch, ))
+    print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
     if args.patience <= (epoch - bestEpoch):
       print('Early stopping')
       break
@@ -186,6 +233,11 @@ if __name__ == '__main__':
     choices=['default', 'standard', 'cotrainer', 'cotrainer-ema']
   )
   parser.add_argument('--ema', type=float, default=1e-3, help='EMA coefficient for the CoTrainer')
+  parser.add_argument(
+    '--schedule', type=str, default=None,
+    help='JSON file with the scheduler parameters for sampling the training dataset'
+  )
+  parser.add_argument('--debug', action='store_true')
 
   main(parser.parse_args())
   pass
