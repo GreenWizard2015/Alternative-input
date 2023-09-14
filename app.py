@@ -18,7 +18,12 @@ from App.CBackground import CBackground
 import argparse
 
 class App:
-  def __init__(self, tracker, dataset, predictor, fps=30, showWebcam=False, hasPredictions=True):
+  def __init__(
+    self, tracker, dataset, predictor, 
+    fps=30, showWebcam=False, hasPredictions=True, showFaceMesh=False
+  ):
+    self._showFaceMesh = True
+    self._faceMesh = None
     self._canPredict = hasPredictions
     self._fps = fps
     self._running = True
@@ -140,6 +145,10 @@ class App:
         surf[:, :, :] = raw # BGR -> RGB
         del surf # release surface
         pass
+
+      if self._showFaceMesh:
+        self._faceMesh = tracked['face points'].copy()
+        
       lastTracked = {
         'tracked': tracked,
         'pos': np.array(self._smoothedPrediction, np.float32)
@@ -205,6 +214,14 @@ class App:
       self.drawText('%s' % (', '.join(modes), ), (5, 95 + 25), Colors.GREEN)
     
     self.drawText('FPS: %.1f' % (fps, ), (5, 95 + 25 + 25), Colors.BLACK)
+
+    if self._faceMesh is not None:
+      scaled = np.multiply(self._faceMesh, self.WH[None])
+      scaled = scaled.astype(np.int32)
+      for p in scaled:
+        pygame.draw.circle(self._display_surf, Colors.RED, tuple(p), 2, 0)
+        continue
+      pass
     return
 
   def _renderPredictions(self):

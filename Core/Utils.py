@@ -192,7 +192,7 @@ for k, pairs in FACE_PARTS_CONNECTIONS.items():
 ###################################
 FACE_MESH_INVALID_VALUE = -100.0
 def decodeLandmarks(landmarks, VISIBILITY_THRESHOLD, PRESENCE_THRESHOLD):
-  points = np.full((468, 2), fill_value=FACE_MESH_INVALID_VALUE, dtype=np.float32)
+  points = np.full((478, 2), fill_value=FACE_MESH_INVALID_VALUE, dtype=np.float32)
   for idx, mark in enumerate(landmarks.landmark):
     if (
       (mark.HasField('visibility') and (mark.visibility < VISIBILITY_THRESHOLD)) or

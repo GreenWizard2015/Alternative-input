@@ -21,9 +21,11 @@ class CEyeTracker:
     cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     cap.set(cv2.CAP_PROP_AUTO_WB, 0)
     
-    self._pose = mediapipe.solutions.holistic.Holistic(
-      min_detection_confidence=self._PRESENCE_THRESHOLD,
-      min_tracking_confidence=self._VISIBILITY_THRESHOLD
+    self._pose = mediapipe.solutions.face_mesh.FaceMesh(
+      min_detection_confidence=0.5,
+      min_tracking_confidence=0.5,
+      max_num_faces=1,
+      refine_landmarks=True,
     )
     return self
 
@@ -88,23 +90,21 @@ class CEyeTracker:
     RE = []
     lipsDistancePx = 0
 
-    landmarks = pose.face_landmarks
+    if pose.multi_face_landmarks is None: return (facePoints, LE, RE, lipsDistancePx)
+    landmarks = pose.multi_face_landmarks[0]
     if landmarks:
       dims = np.array(image.shape[:2])[::-1]
       facePoints = Utils.decodeLandmarks(landmarks, self._VISIBILITY_THRESHOLD, self._PRESENCE_THRESHOLD)
       
       LE = facePoints[self._leftEyeIdx]
       RE = facePoints[self._rightEyeIdx]
-      # remove invisible points
-      LE = LE[LE[:, 0] != -1]
-      RE = RE[RE[:, 0] != -1]
       # convert to pixels
       LE = np.multiply(LE, dims[None]).astype(np.int32)
       RE = np.multiply(RE, dims[None]).astype(np.int32)
 
       # measure distance between lips
-      lipsA = np.array(facePoints[17])
-      lipsB = np.array(facePoints[0])
+      lipsA = np.array(facePoints[17, :2])
+      lipsB = np.array(facePoints[0, :2])
       lipsDistancePx = np.linalg.norm(np.multiply(lipsA - lipsB, dims))
       pass
     return(facePoints, LE, RE, lipsDistancePx)
