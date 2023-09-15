@@ -11,7 +11,7 @@ from Core.CDummyPredictor import CDummyPredictor
 from Core.CModelWrapper import CModelWrapper
 from Core.Utils import FACE_MESH_INVALID_VALUE
 import os, time
-from App.Utils import Colors
+from App.Utils import Colors, numpyToSurfaceBind
 import App.AppModes as AppModes
 from App.CRandomIllumination import CRandomIllumination
 from App.CBackground import CBackground
@@ -20,7 +20,8 @@ import argparse
 class App:
   def __init__(
     self, tracker, dataset, predictor, 
-    fps=30, showWebcam=False, hasPredictions=True, showFaceMesh=False
+    fps=30, hasPredictions=True, 
+    showWebcam=False, showFaceMesh=False, showEyes=False
   ):
     self._showFaceMesh = showFaceMesh
     self._faceMesh = None
@@ -44,12 +45,14 @@ class App:
     self._illumination = CRandomIllumination()
     self._background = CBackground()
 
-    self._cameraView = None
-    self._cameraSurface = None
-
+    self._cameraView = self._cameraSurface = None
     if showWebcam:
       self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
       self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
+
+    if showEyes:
+      self._eyesView = np.array([(50, 200 + 300 + 50), (50 + 300, 200 + 300 + 50 + 100)])
+      self._eyesSurface = pygame.Surface(self._eyesView[1] - self._eyesView[0])
 
     self._predictorMaskFace = False
     self._predictorMaskLeftEye = False
@@ -136,15 +139,11 @@ class App:
       self._currentMode.on_sample(tracked)
       
       if not(self._cameraView is None):
-        WH = self._cameraView[1] - self._cameraView[0]
-        raw = tracked['raw']
-        raw = cv2.resize(raw, tuple(WH.astype(np.int32)))
-        surf = pygame.surfarray.pixels3d(self._cameraSurface)
-        raw = raw[:, :, ::-1] # RGB -> BGR
-        raw = np.swapaxes(raw, 0, 1) # H x W x C -> W x H x C
-        surf[:, :, :] = raw # BGR -> RGB
-        del surf # release surface
-        pass
+        numpyToSurfaceBind(tracked['raw'][..., ::-1], self._cameraSurface)
+ 
+      if self._eyesView is not None:
+        eyes = np.concatenate([tracked['left eye'], tracked['right eye']], axis=1)
+        numpyToSurfaceBind(eyes, self._eyesSurface)
 
       if self._showFaceMesh:
         self._faceMesh = tracked['face points'].copy()
@@ -190,6 +189,9 @@ class App:
 
     if not(self._cameraSurface is None): # render camera surface
       window.blit(self._cameraSurface, self._cameraView)
+
+    if not(self._eyesSurface is None): # render eyes surface
+      window.blit(self._eyesSurface, self._eyesView)
     
     self._currentMode.on_render(window)
     if self._currentMode.paused:

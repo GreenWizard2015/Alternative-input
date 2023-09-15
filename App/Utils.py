@@ -52,3 +52,13 @@ def rotate(vector, rads):
     np.sin(rads) * vector[0] + np.cos(rads) * vector[1],
   ])
   
+def numpyToSurfaceBind(array, surface):
+  surf = pygame.surfarray.pixels3d(surface)
+  WH = surf.shape[:2]
+  array = cv2.resize(array, tuple(WH))
+  if 2 == len(array.shape): array = array.reshape((*array.shape, 1)) # H x W -> H x W x 1
+  if 1 == array.shape[-1]: array = np.repeat(array, 3, axis=-1) # grayscale -> RGB
+  array = np.swapaxes(array, 0, 1) # H x W x C -> W x H x C
+  surf[:, :, :] = array
+  del surf # release surface
+  return

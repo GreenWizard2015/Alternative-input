@@ -74,7 +74,7 @@ class CEyeTracker:
 
     A = (pts.min(axis=0) - padding).clip(min=0)
     B = pts.max(axis=0) + padding
-    B = np.minimum(B, image.shape[:2])
+    B = np.minimum(B, image.shape[:2][::-1])
     
     crop = image[ A[1]:B[1], A[0]:B[0], ]
     if np.min(crop.shape[:2]) < 8:
@@ -93,14 +93,11 @@ class CEyeTracker:
     if pose.multi_face_landmarks is None: return (facePoints, LE, RE, lipsDistancePx)
     landmarks = pose.multi_face_landmarks[0]
     if landmarks:
-      dims = np.array(image.shape[:2])[::-1]
+      dims = np.array(image.shape[:2])[::-1][None]
       facePoints = Utils.decodeLandmarks(landmarks, self._VISIBILITY_THRESHOLD, self._PRESENCE_THRESHOLD)
       
-      LE = facePoints[self._leftEyeIdx]
-      RE = facePoints[self._rightEyeIdx]
-      # convert to pixels
-      LE = np.multiply(LE, dims[None]).astype(np.int32)
-      RE = np.multiply(RE, dims[None]).astype(np.int32)
+      LE = np.multiply(facePoints[self._leftEyeIdx], dims).astype(np.int32)
+      RE = np.multiply(facePoints[self._rightEyeIdx], dims).astype(np.int32)
 
       # measure distance between lips
       lipsA = np.array(facePoints[17, :2])
