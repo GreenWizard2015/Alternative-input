@@ -50,6 +50,7 @@ class App:
       self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
       self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
 
+    self._eyesView = self._eyesSurface = None
     if showEyes:
       self._eyesView = np.array([(50, 200 + 300 + 50), (50 + 300, 200 + 300 + 50 + 100)])
       self._eyesSurface = pygame.Surface(self._eyesView[1] - self._eyesView[0])
