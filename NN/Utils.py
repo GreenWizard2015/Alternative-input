@@ -267,3 +267,26 @@ class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
     # return (tf.nn.relu(x) + self._eps) * (self._normalization(xhat) + self._eps) # more general/stable version
     # with SM normalization, relu and addition are redundant
     return x * self._normalization(xhat)
+####################################
+# Hacky way to provide same optimizer for all models
+def createOptimizer(config=None):
+  if config is None:
+    config = {
+      'learning_rate': 1e-4,
+      'weight_decay': 1e-1,
+      'exclude_from_weight_decay': [
+        'batch_normalization', 'bias',
+        'CEL_', # exclude CCoordsEncodingLayer from weight decay
+        '_gate', '_PE', '_scale', # exclude some custom layers variables
+      ],
+    }
+    pass
+
+  optimizer = tf.optimizers.AdamW(
+    learning_rate=config['learning_rate'],
+    weight_decay=config['weight_decay'],
+  )
+  var_names = config.get('exclude_from_weight_decay', None)
+  if var_names is not None:
+    optimizer.exclude_from_weight_decay(var_names=var_names)
+  return optimizer

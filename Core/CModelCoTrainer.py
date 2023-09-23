@@ -38,9 +38,9 @@ class CModelCoTrainer(CModelWrapper):
   
   def _compile(self):
     print('Compile model')
-    self._model.compile(tf.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-6))
+    self._model.compile(optimizer=NNU.createOptimizer())
     if not self._useEMA:
-      self._modelB.compile(tf.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-6))
+      self._modelB.compile(optimizer=NNU.createOptimizer())
     else:
       # hard copy the weights of the model to the modelB
       for v, vB in zip(self._model.variables, self._modelB.variables): vB.assign(v)

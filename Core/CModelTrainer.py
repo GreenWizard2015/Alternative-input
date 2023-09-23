@@ -28,8 +28,7 @@ class CModelTrainer(CModelWrapper):
     return
   
   def _compile(self):
-    print('Compile model')
-    self._model.compile(tf.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-6))
+    self._model.compile(optimizer=NNU.createOptimizer())
     return
   
   def _trainStep(self, Data):

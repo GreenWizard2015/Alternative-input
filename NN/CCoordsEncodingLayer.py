@@ -21,7 +21,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       self._shifts = tf.Variable(
         initial_value=tf.random_normal_initializer()(shape=(1, 1, 1, N), dtype="float32"),
         trainable=True, dtype="float32",
-        name=self.name + '/_shifts'
+        name=self.name + '/CEL_shifts'
       )
     else:
       self._shifts = tf.constant(0.0, dtype=tf.float32)
@@ -36,7 +36,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     self._freqDeltas = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=(N,), dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_freqDeltas'
+      name=self.name + '/CEL_freqDeltas'
     )
 
     self._dropout = lambda x, **_: x
@@ -56,18 +56,18 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     self._fussionW = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=shapePrefix+[P, F], dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_fussionW'
+      name=self.name + '/CEL_fussionW'
     )
     self._fussionB = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=shapePrefix+[P,], dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_fussionB'
+      name=self.name + '/CEL_fussionB'
     )
     
     self._gates = tf.Variable(
       initial_value=tf.zeros(shape=(1, 1, self._N), dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_gates'
+      name=self.name + '/CEL_gates'
     )
     return
 
