@@ -302,6 +302,10 @@ class App:
       color = colors[(i * 7 + T) % len(colors)]
       pygame.draw.circle(surf, color, pos, i, 0)
       continue
+    # draw contrast borders
+    pygame.draw.circle(surf, Colors.BLACK, pos, R, 1)
+    pygame.draw.circle(surf, Colors.WHITE, pos, R + 1, 1)
+    pygame.draw.circle(surf, Colors.RED, pos, R + 2 + 3, 3)
     return
 
 def _modelFromArgs(args):

@@ -159,13 +159,23 @@ class CSplineMode(CAppMode):
     self._pos = np.zeros((2, )) + 0.5
     self._target = CSpinningTarget(app)
     self._points = None
+    self._scale = 1.0
     self._newSpline(extend=False)
     return
+
+  def _updateScale(self):
+    newScale = np.random.uniform(0.1, 0.2) + self._scale
+    self._scale = newScale
+    if 1.0 < self._scale: self._scale = 0.0
+    return newScale
   
   def _newSpline(self, extend=True):
     self._T = 0.0
     N = 3
-    points = np.random.normal(size=(4, 2), loc=0.5, scale=0.5)
+    scale = self._updateScale()
+    points = np.random.uniform(size=(N + 1, 2)) - 0.5
+    points /= np.linalg.norm(points, axis=-1, keepdims=True) + 1e-6
+    points = 0.5 + (points * scale)
     if extend:
       points = np.concatenate([self._points[-N:], points], axis=0)
     
@@ -175,7 +185,7 @@ class CSplineMode(CAppMode):
     
     speed = np.random.uniform(0.15, 1.0, size=1)[0]
     T = distance[-1] / speed
-    self._maxT = np.clip(T, 20, 40)
+    self._maxT = np.clip(T, N * 3, N * 10)
     distance /= distance[-1]
     
     shift = distance[N - 1] if extend else 0.0
