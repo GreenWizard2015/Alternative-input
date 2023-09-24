@@ -9,13 +9,13 @@ from Core.CModelWrapper import CModelWrapper
 '''
 class CModelCoTrainer(CModelWrapper):
   def __init__(self, timesteps, model='simple', useEMA=False, **kwargs):
-    # initialize some variables before calling super().__init__, because it will call _compile
-    self._useEMA = useEMA
-    if self._useEMA: self._eta = kwargs.get('eta', 1e-3)    
+    super().__init__(timesteps, model, **kwargs)
+    # create a second model with the same architecture
     self._modelBW = CModelWrapper(timesteps, model, **kwargs)
     self._modelB = self._modelBW._model
-    
-    super().__init__(timesteps, model, **kwargs)
+    # setup EMA
+    self._useEMA = useEMA
+    if self._useEMA: self._eta = kwargs.get('eta', 1e-3)
     # add signatures to help tensorflow optimize the graph
     specification = self._modelRaw['inputs specification']
     self._trainStep = tf.function(
@@ -34,6 +34,7 @@ class CModelCoTrainer(CModelWrapper):
         ( tf.TensorSpec(shape=(None, None, None, 2), dtype=tf.float32), )
       )]
     )
+    self._compile() # compile the model on initialization
     return
   
   def _compile(self):
