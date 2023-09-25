@@ -55,14 +55,18 @@ class CEyeTracker:
     if not(REVisible or LEVisible):
       return None
 
+    leftEye, leftEyeArea = self._extract(image, LE, BGR)
+    rightEye, rightEyeArea = self._extract(image, RE, BGR)
     return {
       # main data
       'time': time.time(),
       'face points': facePoints,
-      'left eye': self._extract(image, LE, BGR),
-      'right eye': self._extract(image, RE, BGR),
+      'left eye': leftEye,
+      'right eye': rightEye,
       # misc
       'lips distance': lipsDistancePx,
+      'left eye area': leftEyeArea,
+      'right eye area': rightEyeArea,
       'raw': frame,
     }
   
@@ -70,19 +74,21 @@ class CEyeTracker:
     sz = (32, 32)
     padding = 5
     if len(pts) < 5:
-      return np.zeros(sz, np.uint8)
+      return np.zeros(sz, np.uint8), None
 
+    HW = np.array(image.shape[:2][::-1])
     A = (pts.min(axis=0) - padding).clip(min=0)
     B = pts.max(axis=0) + padding
-    B = np.minimum(B, image.shape[:2][::-1])
+    B = np.minimum(B, HW)
     
+    rect = np.array([A, B], np.float32) / HW
     crop = image[ A[1]:B[1], A[0]:B[0], ]
     if np.min(crop.shape[:2]) < 8:
-      return np.zeros(sz, np.uint8)
+      return np.zeros(sz, np.uint8), rect
     
     crop = cv2.resize(crop, sz)
     crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY if isBGR else cv2.COLOR_RGB2GRAY)
-    return crop.astype(np.uint8)
+    return crop.astype(np.uint8), rect
   
   def _processFace(self, pose, image):
     facePoints = {}

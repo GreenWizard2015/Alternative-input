@@ -132,23 +132,45 @@ class App:
       if G.K_F3 == event.key:
         self._predictorMaskRightEye = not self._predictorMaskRightEye
     return
+  
+  def _updateEyesImage(self, tracked):
+    if self._eyesSurface is None: return
+
+    def drawPoints(img, points, rect, color=Colors.RED):
+      A = rect[0]
+      rectDim = rect[1] - A
+      # remove points outside of the rect
+      points = (points - A) / rectDim
+      mask = np.logical_and(0.0 <= points, points <= 1.0)
+      mask = np.all(mask, axis=-1)
+      points = points[mask]
+
+      img = np.repeat(img[..., None], 3, axis=2) # make RGB
+      hw = np.array(img.shape[:2][::-1])
+      points = np.multiply(points, hw[None]).astype(np.int32)
+      color = np.array(color, np.uint8)
+      for p in points:
+        img[p[1], p[0]] = color
+      return img
+
+    eyes = np.concatenate([
+      drawPoints(tracked['left eye'], tracked['face points'], tracked['left eye area']),
+      drawPoints(tracked['right eye'], tracked['face points'], tracked['right eye area'])
+    ], axis=1)
+    numpyToSurfaceBind(eyes, self._eyesSurface)
+    return
    
   def on_tick(self, deltaT):
     lastTracked = None
     tracked = self._tracker.track()
     if not(tracked is None):
       self._currentMode.on_sample(tracked)
+      self._faceMesh = tracked['face points'].copy()
       
       if not(self._cameraView is None):
         numpyToSurfaceBind(tracked['raw'][..., ::-1], self._cameraSurface)
  
-      if self._eyesView is not None:
-        eyes = np.concatenate([tracked['left eye'], tracked['right eye']], axis=1)
-        numpyToSurfaceBind(eyes, self._eyesSurface)
-
-      if self._showFaceMesh:
-        self._faceMesh = tracked['face points'].copy()
-        
+      self._updateEyesImage(tracked)
       lastTracked = {
         'tracked': tracked,
         'pos': np.array(self._smoothedPrediction, np.float32)
@@ -218,7 +240,7 @@ class App:
     
     self.drawText('FPS: %.1f' % (fps, ), (5, 95 + 25 + 25), Colors.BLACK)
 
-    if self._faceMesh is not None:
+    if self._showFaceMesh and not(self._faceMesh is None):
       scaled = np.multiply(self._faceMesh, self.WH[None])
       scaled = scaled.astype(np.int32)
       for p in scaled:
