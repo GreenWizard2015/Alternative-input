@@ -44,34 +44,39 @@ def Face2StepModel(pointsN, eyeSize, latentSize, contextSize):
   eyeR = L.Input((None, eyeSize, eyeSize, 1))
   context = L.Input((None, contextSize))
 
-  encoded = CRolloutTimesteps(
+  encodedEFList = CRolloutTimesteps(
     eyeEncoder(latentSize=latentSize), name='Eyes'
   )([eyeL, eyeR, context])
   encodedP = CRolloutTimesteps(
     FaceMeshEncoder(latentSize), name='FaceMesh'
   )([points, context])
 
-  combined = CResidualMultiplicativeLayer()([
-    encodedP,
-    sMLP(sizes=[latentSize] * 1, activation='relu')(L.Concatenate(-1)([encodedP, encoded, context]))
-  ])
-  
-  inputs = {
-    'points': points,
-    'left eye': eyeL,
-    'right eye': eyeR,
-    'context': context,
-  }
+  intermediate = {'F2S/encFace': encodedP,}
+  # encodedEFList is a list of encoded eyes features
+  # we need to combine them together and with the encodedP
+  combined = encodedP # start with the face features
+  for i, EFeat in enumerate(encodedEFList):
+    combined = CResidualMultiplicativeLayer(name='F2S/ResMul-%d' % i)([
+      combined,
+      sMLP(sizes=[latentSize] * 1, activation='relu', name='F2S/MLP-%d' % i)(
+        L.Concatenate(-1)([combined, encodedP, EFeat, context])
+      )
+    ])
+     # save intermediate output
+    intermediate['F2S/encEyes-%d' % i] = EFeat
+    intermediate['F2S/combined-%d' % i] = combined
+    continue
   
   return tf.keras.Model(
-    inputs=inputs,
+    inputs={
+      'points': points,
+      'left eye': eyeL,
+      'right eye': eyeR,
+      'context': context,
+    },
     outputs={
       'latent': combined,
-      'intermediate': {
-        'F2S/encEyes': encoded,
-        'F2S/encFace': encodedP,
-        'F2S/combined': combined,
-      }
+      'intermediate': intermediate
     }
   )
 
@@ -84,23 +89,24 @@ def Step2LatentModel(latentSize, contextSize):
   intermediate = {}
   
   encodedT = CTimeEncoderLayer()(T)
-  temporal = sMLP(sizes=[latentSize] * 3, activation='relu')(
+  temporal = sMLP(sizes=[latentSize] * 1, activation='relu')(
     L.Concatenate(-1)([stepsData, encodedT, context])
   )
   temporal = CResidualMultiplicativeLayer()([stepsData, temporal])
   intermediate['S2L/enc0'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-  # simple LSTM to capture temporal dependencies
-  temp = L.LSTM(128, return_sequences=True)(temporal)
-  for i in range(2):
-    temp = L.LSTM(temp.shape[-1], return_sequences=True)(temp)
-  temp = sMLP(sizes=[latentSize] * 3, activation='relu')(
-    L.Concatenate(-1)([temporal, context, encodedT, temp])
-  )
-  temporal = CResidualMultiplicativeLayer()([temporal, temp])
-  intermediate['S2L/ResLSTM'] = temporal
+  for blockId in range(3):
+    temp = L.Concatenate(-1)([temporal, encodedT, context])
+    for _ in range(1):
+      temp = L.LSTM(latentSize, return_sequences=True)(temp)
+    temp = sMLP(sizes=[latentSize] * 1, activation='relu')(
+      L.Concatenate(-1)([temporal, temp])
+    )
+    temporal = CResidualMultiplicativeLayer()([temporal, temp])
+    intermediate['S2L/ResLSTM-%d' % blockId] = temporal
+    continue
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-  latent = sMLP(sizes=[latentSize] * 3, activation='relu')(
+  latent = sMLP(sizes=[latentSize] * 1, activation='relu')(
     L.Concatenate(-1)([stepsData, temporal, encodedT, context, encodedT])
   )
   latent = CResidualMultiplicativeLayer()([stepsData, latent])

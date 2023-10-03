@@ -105,25 +105,35 @@ class CDecodePoint(tf.keras.layers.Layer):
     x = tf.reshape(x, tf.concat([tf.shape(x)[:-1], [2, -1]], axis=-1))
     return self._decode(x)
 ############################################
+from .CCoordsEncodingLayer import CCoordsEncodingLayer
 class CConvPE(tf.keras.layers.Layer):
-  def __init__(self, channels=1, activation=None, **kwargs):
+  def __init__(self, channels=32, activation=None, **kwargs):
     super().__init__(**kwargs)
     self._channels = channels
+    self._coords2pe = CCoordsEncodingLayer(N=channels, sharedTransformation=True)
     self._activation = tf.keras.activations.get(activation)
     return
   
-  def build(self, s):
-    super().build(s)
-    self._PE = tf.Variable(
-      initial_value=tf.zeros((1, *s[1:-1], self._channels), dtype="float32"),
-      trainable=True, dtype="float32",
-      name=self.name + '/_PE'
-    )
-    return
+  def _makeGrid(self, H, W):
+    HRange = tf.linspace(-1.0, 1.0, H)
+    WRange = tf.linspace(-1.0, 1.0, W)
+    coords = tf.meshgrid(HRange, WRange, indexing='ij')
+    coords = tf.stack(coords, axis=-1)
+    coords = tf.reshape(coords, [1, H * W, 2])
+    return coords
+  
+  def _PEFor(self, H, W):
+    coords = self._makeGrid(H, W)
+    coords = self._coords2pe(coords)
+    coords = tf.reshape(coords, [1, H, W, coords.shape[-1]])
+    coords = self._activation(coords)
+    return coords
   
   def call(self, x):
-    B = tf.shape(x)[0]
-    pe = tf.repeat(self._activation(self._PE), B, axis=0)
+    B, H, W = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+    pe = self._PEFor(H, W)
+    pe = tf.repeat(pe, B, axis=0)
+    tf.assert_equal(tf.shape(pe)[:-1], tf.shape(x)[:-1])
     return tf.concat([x, pe], axis=-1)
 ####################################
 class CStackApplySplit(tf.keras.layers.Layer):

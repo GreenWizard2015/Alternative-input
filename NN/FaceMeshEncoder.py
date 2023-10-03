@@ -15,7 +15,7 @@ class FaceMeshEncoder(tf.keras.Model):
     self._dr = tf.keras.layers.SpatialDropout1D(0.1)
 
     self._contextMLP = sMLP(sizes=[latentSize], activation='relu', name='FaceMeshEncoder/contextMLP')
-    self._sMLP2 = sMLP(sizes=[latentSize] * 3, activation='relu', name='FaceMeshEncoder/sMLP-2')
+    self._sMLP2 = sMLP(sizes=[latentSize] * 1, activation='relu', name='FaceMeshEncoder/sMLP-2')
     return
 
   def call(self, data):
