@@ -279,8 +279,9 @@ class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
     return x * self._normalization(xhat)
 ####################################
 class CRMLBlock(tf.keras.Model):
-  def __init__(self, mlp, RML=None, **kwargs):
+  def __init__(self, mlp=None, RML=None, **kwargs):
     super().__init__(**kwargs)
+    if mlp is None: mlp = lambda x: x
     self._mlp = mlp
     if RML is None: RML = CResidualMultiplicativeLayer()
     self._RML = RML
