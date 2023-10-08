@@ -1,5 +1,5 @@
 import tensorflow as tf
-from NN.Utils import sMLP
+from NN.Utils import sMLP, CRMLBlock
 from NN.CCoordsEncodingLayer import CCoordsEncodingLayer
 from Core.Utils import FACE_MESH_INVALID_VALUE
 
@@ -11,11 +11,18 @@ class FaceMeshEncoder(tf.keras.Model):
       sharedTransformation=True, # TODO: compare with non-shared transformation
       name='FaceMeshEncoder/coords'
     )
-    self._sMLP = sMLP(sizes=[8, 2], activation='relu', name='FaceMeshEncoder/sMLP-1')
-    self._dr = tf.keras.layers.SpatialDropout1D(0.1)
+    self._sMLP = sMLP(sizes=[8] * 3, activation='relu', name='FaceMeshEncoder/sMLP-1')
+    self._sMLP2 = sMLP(sizes=[latentSize], activation='relu', name='FaceMeshEncoder/sMLP-2')
 
-    self._contextMLP = sMLP(sizes=[latentSize], activation='relu', name='FaceMeshEncoder/contextMLP')
-    self._sMLP2 = sMLP(sizes=[latentSize] * 1, activation='relu', name='FaceMeshEncoder/sMLP-2')
+    self._RML = [
+      CRMLBlock(
+        mlp=sMLP(
+          sizes=[latentSize * 2] * 3,
+          activation='relu', name=f'FaceMeshEncoder/RML-{i}/mlp'
+        ),
+        name=f'FaceMeshEncoder/RML-{i}'
+      ) for i in range(5)
+    ]
     return
 
   def call(self, data):
@@ -36,11 +43,13 @@ class FaceMeshEncoder(tf.keras.Model):
 
     encodedPoints = self._encodedPoints(points)
     encodedPoints = self._sMLP(encodedPoints)
-    encodedPoints = self._dr(encodedPoints)
     encodedPoints = tf.where(validPointsMask, encodedPoints, 0.0)
     M = encodedPoints.shape[-1]
     tf.assert_equal(tf.shape(encodedPoints), (B, N, M))
     
     encodedPoints = tf.reshape(encodedPoints, (B, N * M))
-    pts = tf.concat([encodedPoints, self._contextMLP(context)], axis=-1)
-    return self._sMLP2(pts)
+    cond = res = self._sMLP2(encodedPoints)
+    for rml in self._RML:
+      res = rml([res, cond])
+      continue
+    return res

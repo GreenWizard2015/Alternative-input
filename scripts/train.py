@@ -176,7 +176,7 @@ def main(args):
         stepsSampling={'max frames': 5},
         # no augmentations by default
         pointsNoise=0.0,
-        eyesDropout=0.0, eyesAdditiveNoise=0.0, brightnessFactor=1.0, lightBlobFactor=1.0,
+        eyesDropout=0.1, eyesAdditiveNoise=0.0, brightnessFactor=1.0, lightBlobFactor=1.0,
       ),
     )
   )

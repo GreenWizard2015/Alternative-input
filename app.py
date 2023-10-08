@@ -239,6 +239,9 @@ class App:
       self.drawText('%s' % (', '.join(modes), ), (5, 95 + 25), Colors.GREEN)
     
     self.drawText('FPS: %.1f' % (fps, ), (5, 95 + 25 + 25), Colors.BLACK)
+    # print screen resolution
+    wh = self.WH
+    self.drawText('Resolution: %d x %d' % (wh[0], wh[1]), (5, 95 + 25 + 25 + 25), Colors.BLACK)
 
     if self._showFaceMesh and not(self._faceMesh is None):
       scaled = np.multiply(self._faceMesh, self.WH[None])

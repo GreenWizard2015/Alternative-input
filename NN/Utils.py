@@ -225,7 +225,7 @@ class CQuantizeLayer(tf.keras.layers.Layer):
     return x + tf.stop_gradient(quantized - x)
 ####################################
 class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
-  def __init__(self, eps=1e-8, headsN=3, **kwargs):
+  def __init__(self, eps=1e-8, headsN=1, **kwargs):
     super().__init__(**kwargs)
     self._eps = eps
     self._scale = tf.Variable(
@@ -277,6 +277,27 @@ class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
     # return (tf.nn.relu(x) + self._eps) * (self._normalization(xhat) + self._eps) # more general/stable version
     # with SM normalization, relu and addition are redundant
     return x * self._normalization(xhat)
+####################################
+class CRMLBlock(tf.keras.Model):
+  def __init__(self, mlp, RML=None, **kwargs):
+    super().__init__(**kwargs)
+    self._mlp = mlp
+    if RML is None: RML = CResidualMultiplicativeLayer()
+    self._RML = RML
+    return
+  
+  def build(self, input_shapes):
+    xShape = input_shapes[0]
+    self._lastDense = L.Dense(xShape[-1], activation='relu', name='%s/LastDense' % self.name)
+    return super().build(input_shapes)
+  
+  def call(self, x):
+    assert isinstance(x, list), "expected list of inputs"
+    xhat = tf.concat(x, axis=-1)
+    xhat = self._mlp(xhat)
+    xhat = self._lastDense(xhat)
+    x0 = x[0]
+    return self._RML([x0, xhat])
 ####################################
 # Hacky way to provide same optimizer for all models
 def createOptimizer(config=None):
