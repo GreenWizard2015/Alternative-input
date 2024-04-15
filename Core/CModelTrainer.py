@@ -31,6 +31,15 @@ class CModelTrainer(CModelWrapper):
     self._model.compile(optimizer=NNU.createOptimizer())
     return
   
+  def _pointLoss(self, ytrue, ypred):
+    # pseudo huber loss
+    delta = 0.01
+    tf.assert_equal(tf.shape(ytrue), tf.shape(ypred))
+    diff = tf.square(ytrue - ypred)
+    loss = tf.sqrt(diff + delta ** 2) - delta
+    tf.assert_equal(tf.shape(loss), tf.shape(ytrue))
+    return tf.reduce_mean(loss, axis=-1)
+  
   def _trainStep(self, Data):
     print('Instantiate _trainStep')
     ###############
@@ -44,8 +53,7 @@ class CModelTrainer(CModelWrapper):
       predictions = self._model(data, training=True)
       predictions = dict(**predictions['intermediate'], final=predictions['result'])
       for name, pts in predictions.items():
-        tf.assert_equal(tf.shape(pts), tf.shape(y))
-        loss = tf.losses.mse(y, pts)
+        loss = self._pointLoss(y, pts)
         losses['loss-%s' % name] = tf.reduce_mean(loss)
         continue
       loss = sum(losses.values())
@@ -74,7 +82,7 @@ class CModelTrainer(CModelWrapper):
     points = predictions['result'][:, -1, :]
     tf.assert_equal(tf.shape(points), tf.shape(y))
 
-    loss = tf.losses.mse(y, points)
+    loss = self._pointLoss(y, points)
     tf.assert_equal(tf.shape(loss), tf.shape(y)[:1])
     _, dist = NNU.normVec(points - y)
     return loss, points, dist
