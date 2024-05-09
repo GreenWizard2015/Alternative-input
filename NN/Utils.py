@@ -217,10 +217,11 @@ class CQuantizeLayer(tf.keras.layers.Layer):
   def call(self, x, training=None):
     quantized = x
     if training:
-      quantized = x + tf.random.truncated_normal(tf.shape(x), 0.0, 0.1)
+      d = 1e-4
+      quantized = x + tf.random.truncated_normal(tf.shape(x), -0.5 + d, 0.5 - d)
       pass
 
-    quantized = tf.round(quantized)
+    quantized = tf.floor(quantized)
     quantized = 0.5 + tf.clip_by_value(quantized, self._minValue, self._maxValue)
     return x + tf.stop_gradient(quantized - x)
 ####################################

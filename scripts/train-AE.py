@@ -11,71 +11,31 @@ from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
-from Core.CModelTrainer import CModelTrainer
-from Core.CModelCoTrainer import CModelCoTrainer
+from Core.CAutoencoderTrainer import CAutoencoderTrainer
 import tqdm
 import json
-
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-def unbatch(qu):
-  qu = np.array(qu)
-  qu = qu.transpose(1, 0, *np.arange(2, len(qu.shape)))
-  return qu.reshape((qu.shape[0], -1, qu.shape[-1]))
-
-def plotPrediction(Y, predV, filename):
-  plt.figure(figsize=(8, 8))
-  plt.plot(Y[:, 0], Y[:, 1], 'o', markersize=1)
-  plt.plot(predV[:, 0], predV[:, 1], 'o', markersize=1)
-  for i in range(5):
-    d = i * 0.1
-    plt.gca().add_patch(
-      patches.Rectangle(
-        (d,d), 1-2*d, 1-2*d,
-        linewidth=1,edgecolor='r',facecolor='none'
-      )
-    )
-
-  plt.savefig(filename)
-  plt.clf()
-  plt.close()
-  return
+from Core.Utils import FACE_MESH_INVALID_VALUE
 
 def _eval(dataset, model, plotFilename, args):
   T = time.time()
   # evaluate the model on the val dataset
-  lossPerSample = {'loss': [], 'pos': []}
-  predV = []
-  predDist = []
-  Y = []
+  lossPerSample = {'loss': []}
   for batchId in range(len(dataset)):
-    _, (y,) = batch = dataset[batchId]
-    loss, predP, dist = model.eval(batch)
-    predV.append(predP)
-    predDist.append(dist)
-    Y.append(y[:, -1, 0])
-    for l, pos in zip(loss, y[:, -1]):
-      lossPerSample['loss'].append(l)
-      lossPerSample['pos'].append(pos[0])
-      continue
+    batch, _ = dataset[batchId]
+    del batch['time']
+    loss = model.eval(batch)
+    lossPerSample['loss'].append(loss)
     continue
 
-  if args.debug: # plot the predictions and the ground truth
-    Y = unbatch(Y).reshape((-1, 2))
-    predV = unbatch(predV).reshape((-1, 2))
-    plotPrediction(Y, predV, plotFilename)
-  
   loss = np.mean(lossPerSample['loss'])
-  dist = np.mean(predDist)
   T = time.time() - T
-  return loss, dist, T
+  return loss, T
 
 def evaluate(datasets, model, folder, args):
   totalLoss = 0.0
   for i, dataset in enumerate(datasets):
-    loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
-    print('Test %d / %d | %.2f sec | Loss: %.5f. Distance: %.5f' % (i + 1, len(datasets), T, loss, dist))
+    loss, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
+    print('Test %d / %d | %.2f sec | Loss: %.5f.' % (i + 1, len(datasets), T, loss))
     totalLoss += loss
     continue
   print('Mean loss: %.5f' % (totalLoss / len(datasets), ))
@@ -88,7 +48,10 @@ def _modelTrainingLoop(model, dataset):
     with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
-        stats = model.fit(dataset.sample(**sampleParams))
+        batch, _ = dataset.sample(**sampleParams)
+        del batch['clean']['time']
+        del batch['augmented']['time']
+        stats = model.fit(batch)
         history['time'].append(stats['time'])
         for k in stats['losses'].keys():
           history[k].append(stats['losses'][k])
@@ -146,15 +109,12 @@ def _schedule_from_json(args):
   return F
 
 def _trainer_from(args):
-  if args.trainer == 'standard': return CModelTrainer
-  if args.trainer == 'default': return CModelTrainer
-  if args.trainer == 'cotrainer': return lambda **kwargs: CModelCoTrainer(useEMA=False, **kwargs)
-  if args.trainer == 'cotrainer-ema':
-    return lambda **kwargs: CModelCoTrainer(useEMA=True, eta=args.ema, **kwargs)
+  if args.trainer == 'standard': return CAutoencoderTrainer
+  if args.trainer == 'default': return CAutoencoderTrainer
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def main(args):
-  timesteps = args.steps
+  timesteps = 1
   folder = os.path.join(args.folder, 'Data')
   if args.schedule is None:
     getSampleParams = _defaultSchedule(args)
@@ -175,14 +135,42 @@ def main(args):
         timesteps=timesteps,
         stepsSampling={'max frames': 5},
         # no augmentations by default
-        pointsNoise=0.0,
-        eyesDropout=0.1, eyesAdditiveNoise=0.0, brightnessFactor=1.0, lightBlobFactor=1.0,
+        pointsNoise=0.025,
+        eyesDropout=0.03, eyesAdditiveNoise=0.1, brightnessFactor=2.0, lightBlobFactor=2.0,
       ),
     )
   )
-  model = dict(timesteps=timesteps)
-  if args.encoder is not None:
-    model['encoder'] = args.encoder
+  #####################
+  # find mean of dataset
+  means = {'points': 0, 'left eye': 0, 'right eye': 0}
+  N = {'points': 0, 'left eye': 0, 'right eye': 0}
+  for idx in trainDataset._dataset.validSamples():
+    sample, _ = trainDataset._dataset.sampleById(idx)
+    if sample is None: continue
+    sample = sample['clean']
+
+    # process the points
+    validMask = np.all((0 <= sample['points']) & (sample['points'] <= 1.0), axis=-1)[..., None]
+    N['points'] += validMask.astype(np.int32)
+    means['points'] += np.where(validMask, sample['points'], 0.0)
+
+    # process the eyes
+    isNotBlank = np.logical_not(np.all(sample['left eye'] == 0.0))
+    N['left eye'] += isNotBlank.astype(np.int32)
+    means['left eye'] += sample['left eye'] if isNotBlank else 0.0
+    
+    isNotBlank = np.logical_not(np.all(sample['right eye'] == 0.0))
+    N['right eye'] += isNotBlank.astype(np.int32)
+    means['right eye'] += sample['right eye'] if isNotBlank else 0.0
+    continue
+
+  for k in N.keys():
+    print(k, N[k])
+  means = {k: v / N[k] for k, v in means.items()}
+  means = {k: v.numpy().astype(np.float32) for k, v in means.items()}
+  print('Means:', {k: v.shape for k, v in means.items()})
+  #####################
+  model = dict(means=means)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model)
   if args.modelId is not None:
@@ -225,22 +213,19 @@ if __name__ == '__main__':
   parser.add_argument('--epochs', type=int, default=1000)
   parser.add_argument('--batch-size', type=int, default=64)
   parser.add_argument('--patience', type=int, default=15)
-  parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
   parser.add_argument('--trainset', type=str)
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
     '--trainer', type=str, default='default', 
-    choices=['default', 'standard', 'cotrainer', 'cotrainer-ema']
+    choices=['default']
   )
-  parser.add_argument('--ema', type=float, default=1e-3, help='EMA coefficient for the CoTrainer')
   parser.add_argument(
     '--schedule', type=str, default=None,
     help='JSON file with the scheduler parameters for sampling the training dataset'
   )
   parser.add_argument('--debug', action='store_true')
-  parser.add_argument('--encoder', type=str, default=None)
 
   main(parser.parse_args())
   pass

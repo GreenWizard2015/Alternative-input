@@ -69,8 +69,13 @@ class CModelTrainer(CModelWrapper):
     losses = {k: v.numpy() for k, v in losses.items()}
     return {'time': int((time.time() - t) * 1000), 'losses': losses}
   
-  def load(self, folder, postfix=''):
-    super().load(folder, postfix)
+  def load(self, folder=None, postfix='', encoder=None):
+    if encoder is not None:
+      F2S = self._modelRaw['Face2Step']
+      F2S.trainable = False
+      F2S.load_weights(encoder)
+    
+    if folder is not None: super().load(folder, postfix)
     self._compile()
     return
   
