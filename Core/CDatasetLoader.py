@@ -31,10 +31,6 @@ class CDatasetLoader:
   
   def sample(self, **kwargs):
     return self._dataset.sample(**kwargs)
-
-  @property
-  def contexts(self):
-    return self._dataset.contexts
   
 if __name__ == '__main__':
   import cv2

@@ -5,7 +5,7 @@ class CModelWrapper:
   def __init__(self, timesteps, model='simple', **kwargs):
     self._modelID = model
     self._timesteps = timesteps
-    self._modelRaw = networks.Face2LatentModel(steps=timesteps, contexts=None, latentSize=64)
+    self._modelRaw = networks.Face2LatentModel(steps=timesteps, latentSize=64)
     self._model = self._modelRaw['main']
   
     if 'weights' in kwargs:

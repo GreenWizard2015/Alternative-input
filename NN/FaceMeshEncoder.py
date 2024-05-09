@@ -26,11 +26,10 @@ class FaceMeshEncoder(tf.keras.Model):
     return
 
   def call(self, data):
-    points, context = data
+    points = data
     B = tf.shape(points)[0]
     N = tf.shape(points)[1]
     tf.assert_equal(tf.shape(points), (B, N, 2))
-    tf.assert_equal(tf.shape(context)[0], B)
 
     validPointsMask = tf.reduce_all(FACE_MESH_INVALID_VALUE != points, axis=-1)[..., None]
     # append to points normalized indices

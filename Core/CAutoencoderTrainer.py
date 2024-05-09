@@ -8,7 +8,7 @@ class CAutoencoderTrainer:
   def __init__(self, model='autoencoder', means=None, **kwargs):
     super().__init__()
     self._modelID = model
-    self._modelRaw = networks.FaceAutoencoderModel(steps=None, contextSize=1, means=means)
+    self._modelRaw = networks.FaceAutoencoderModel(steps=None, means=means)
     self._model = self._modelRaw['main']
   
     if 'weights' in kwargs:
@@ -48,8 +48,6 @@ class CAutoencoderTrainer:
     x = {k: v for k, v in x.items()}
     x['clean'] = {k: v for k, v in x['clean'].items()}
     x['augmented'] = {k: v for k, v in x['augmented'].items()}
-    x['clean']['context'] = tf.zeros((B, 1), dtype=tf.float32)
-    x['augmented']['context'] = tf.zeros((B, 1), dtype=tf.float32)
     with tf.GradientTape() as tape:
       predictions = self._model(x['augmented'], training=True)
       loss = self._pointLoss(x['clean']['points'], predictions['points'])
@@ -88,7 +86,6 @@ class CAutoencoderTrainer:
     print('Instantiate _eval')
     B = tf.shape(x['points'])[0]
     x = {k: v for k, v in x.items()}
-    x['context'] = tf.zeros((B, 1), dtype=tf.float32)
     predictions = self._model(x, training=False)
     loss = self._pointLoss(x['points'], predictions['points'])
     for name in ['left eye', 'right eye']:

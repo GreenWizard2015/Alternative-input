@@ -40,7 +40,7 @@ class CEyeEncoder(tf.keras.Model):
     return
 
   def build(self, input_shape):
-    eyeL_shape, eyeR_shape, context_shape = input_shape
+    eyeL_shape, eyeR_shape = input_shape
     assert np.equal(eyeL_shape, eyeR_shape).all(), 'Left and right eye shapes must be equal'
     # Define the shared encoder
     eyeShp = (None, *eyeL_shape[1:3], 2 * eyeL_shape[3])
@@ -52,8 +52,7 @@ class CEyeEncoder(tf.keras.Model):
     return super().build(input_shape)
 
   def call(self, inputs):
-    # context is not used
-    eyeL, eyeR, context = inputs
+    eyeL, eyeR = inputs
     # combine the eyes into one tensor (B, H, W, 2C)
     eyes = tf.concat([eyeL, eyeR], -1)
     return self._encoder(eyes)
