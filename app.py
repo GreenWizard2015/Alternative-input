@@ -342,9 +342,9 @@ def _modelFromArgs(args):
     stats = json.load(f)
 
   # My own ids hardcoded here for simplicity
-  userId = 'd5ea23a9-4a4d-472c-a5ac-2e0091f1c5e5'
+  userId = '98fdb9d9-14ef-9276-31e6-836e830acc19'
   placeId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
-  screenId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed/1864078267'
+  screenId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed/29f35417-7bb7-3c94-124c-2ae16bda235d'
   return CModelWrapper(
     timesteps=args.steps,  
     user=dict(
