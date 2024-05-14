@@ -91,7 +91,7 @@ class CModelTrainer(CModelWrapper):
     tf.assert_equal(tf.shape(points), tf.shape(y))
 
     loss = self._pointLoss(y, points)
-    tf.assert_equal(tf.shape(loss), tf.shape(y)[:1])
+    tf.assert_equal(tf.shape(loss), tf.shape(y)[:2])
     _, dist = NNU.normVec(points - y)
     return loss, points, dist
 
