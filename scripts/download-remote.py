@@ -63,8 +63,8 @@ def deserialize(buffer):
     offset += 36
     
     # Read screenId (int32)
-    sample['screenId'] = np.frombuffer(buffer, dtype=np.int32, count=1, offset=offset)[0]
-    offset += 4
+    sample['screenId'] = buffer[offset:offset+36].decode('utf-8')
+    offset += 36
     
     if (-2 < sample['goal']).all() and (sample['goal'] < 2).all():
       samples.append(sample)
