@@ -23,6 +23,7 @@ class FaceMeshEncoder(tf.keras.Model):
         name=f'FaceMeshEncoder/RML-{i}'
       ) for i in range(5)
     ]
+    self._invalidEmbedding = tf.Variable(tf.random.normal((8,)), trainable=True, name='FaceMeshEncoder/invalidEmbedding')
     return
 
   def call(self, data):
@@ -42,7 +43,7 @@ class FaceMeshEncoder(tf.keras.Model):
 
     encodedPoints = self._encodedPoints(points)
     encodedPoints = self._sMLP(encodedPoints)
-    encodedPoints = tf.where(validPointsMask, encodedPoints, 0.0)
+    encodedPoints = tf.where(validPointsMask, encodedPoints, self._invalidEmbedding)
     M = encodedPoints.shape[-1]
     tf.assert_equal(tf.shape(encodedPoints), (B, N, M))
     

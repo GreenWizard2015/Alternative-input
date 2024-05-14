@@ -38,10 +38,11 @@ class IntermediatePredictor(tf.keras.layers.Layer):
 # End of IntermediatePredictor
 ################################################################
 
-def Face2StepModel(pointsN, eyeSize, latentSize):
+def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
   points = L.Input((None, pointsN, 2))
   eyeL = L.Input((None, eyeSize, eyeSize, 1))
   eyeR = L.Input((None, eyeSize, eyeSize, 1))
+  embeddings = L.Input((None, embeddingsSize))
 
   encodedEFList = CRolloutTimesteps(
     eyeEncoder(latentSize=latentSize), name='Eyes'
@@ -58,7 +59,7 @@ def Face2StepModel(pointsN, eyeSize, latentSize):
     combined = CResidualMultiplicativeLayer(name='F2S/ResMul-%d' % i)([
       combined,
       sMLP(sizes=[latentSize] * 1, activation='relu', name='F2S/MLP-%d' % i)(
-        L.Concatenate(-1)([combined, encodedP, EFeat])
+        L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
       )
     ])
      # save intermediate output
@@ -66,11 +67,14 @@ def Face2StepModel(pointsN, eyeSize, latentSize):
     intermediate['F2S/combined-%d' % i] = combined
     continue
   
+  combined = L.Dense(latentSize, name='F2S/Combine')(combined)
+  # combined = CQuantizeLayer()(combined)
   return tf.keras.Model(
     inputs={
       'points': points,
       'left eye': eyeL,
       'right eye': eyeR,
+      'embeddings': embeddings,
     },
     outputs={
       'latent': combined,
@@ -78,16 +82,17 @@ def Face2StepModel(pointsN, eyeSize, latentSize):
     }
   )
 
-def Step2LatentModel(latentSize):
-  stepsDataInput = L.Input((None, latentSize))
+def Step2LatentModel(latentSize, embeddingsSize):
+  latents = L.Input((None, latentSize))
+  embeddings = L.Input((None, embeddingsSize))
   T = L.Input((None, 1))
 
-  stepsData = stepsDataInput
+  stepsData = latents
   intermediate = {}
   
   encodedT = CTimeEncoderLayer()(T)
   temporal = sMLP(sizes=[latentSize] * 1, activation='relu')(
-    L.Concatenate(-1)([stepsData, encodedT])
+    L.Concatenate(-1)([stepsData, encodedT, embeddings])
   )
   temporal = CResidualMultiplicativeLayer()([stepsData, temporal])
   intermediate['S2L/enc0'] = temporal
@@ -108,117 +113,16 @@ def Step2LatentModel(latentSize):
   )
   latent = CResidualMultiplicativeLayer()([stepsData, latent])
   return tf.keras.Model(
-    inputs=[stepsDataInput, T],
+    inputs={
+      'latent': latents,
+      'time': T,
+      'embeddings': embeddings,
+    },
     outputs={
       'latent': latent,
       'intermediate': intermediate
     }
   )
-
-def Step2FaceModel(latentSize, means):
-  '''
-  Take encoded latent and reconstruct the face
-  '''
-  stepsDataInput = L.Input((None, latentSize))
-
-  stepsData = stepsDataInput
-  splits = [latentSize // 3, latentSize // 3, latentSize - 2 * (latentSize // 3)]
-  pointsData = stepsData[:, :, :splits[0]]
-  eyesLData = stepsData[:, :, splits[0]:splits[0] + splits[1]]
-  eyesRData = stepsData[:, :, splits[0] + splits[1]:]
-  
-  sizes = [latentSize * i for i in range(5)] + [latentSize * 4] * 4
-  # points branch
-  faceCenter = means['points'].mean(axis=0, keepdims=True)
-  meanShift = faceCenter - means['points']
-  faceCenter = tf.Variable(faceCenter, trainable=False, name='faceCenter')
-  meanShift = tf.Variable(meanShift, trainable=False, name='meanShift')
-
-  pointsMean = sMLP(sizes=sizes, activation='relu')(pointsData)
-  pointsMean = L.Dense(2)(pointsMean)
-  pointsMean = L.Reshape((-1, 1, 2))(pointsMean)
-
-  points = sMLP(sizes=sizes, activation='relu')(
-    pointsData
-  )
-  points = L.Dense(478 * 2)(points)
-  points = L.Reshape((-1, 478, 2))(points)
-  points = pointsMean + points + meanShift.reshape((1, 1, 478, 2))
-
-  # eyes branch
-  eyeL = sMLP(sizes=[latentSize * i for i in range(5)] * 4, activation='relu')(eyesLData)
-  eyeL = L.Dense(32 * 32)(eyeL)
-  eyeL = L.Reshape((-1, 32, 32))(eyeL)
-  eyeLMean = tf.Variable(
-    means['left eye'].reshape((1, 1, 32, 32)),
-    trainable=False,
-    name='leftEyeMean'
-  )
-  eyeL = means['left eye'].reshape((1, 1, 32, 32)) + eyeL
-
-  eyeR = sMLP(sizes=[latentSize * i for i in range(5)] * 4, activation='relu')(eyesRData)
-  eyeR = L.Dense(32 * 32)(eyeR)
-  eyeR = L.Reshape((-1, 32, 32))(eyeR)
-  eyeRMean = tf.Variable(
-    means['right eye'].reshape((1, 1, 32, 32)),
-    trainable=False,
-    name='rightEyeMean'
-  )
-  eyeR = eyeRMean + eyeR
-
-  return tf.keras.Model(
-    inputs={
-      'stepsDataInput': stepsDataInput,
-    },
-    outputs={
-      'points': points,
-      'left eye': eyeL,
-      'right eye': eyeR,
-    }
-  )
-
-def FaceAutoencoderModel(pointsN=478, eyeSize=32, steps=None, latentSize=64, means=None):
-  # Inputs
-  points = L.Input((steps, pointsN, 2), name='input_points')
-  eyeL = L.Input((steps, eyeSize, eyeSize, 1), name='input_left_eye')
-  eyeR = L.Input((steps, eyeSize, eyeSize, 1), name='input_right_eye')
-
-  # Encoder: Encode face and eyes to a latent space
-  face2StepModel = Face2StepModel(pointsN, eyeSize, latentSize)
-  encoded_outputs = face2StepModel({
-    'points': points,
-    'left eye': eyeL,
-    'right eye': eyeR,
-  })
-  latent = encoded_outputs['latent']
-
-  # Decoder: Decode from latent space back to face and eyes
-  step2FaceModel = Step2FaceModel(latentSize=latentSize, means=means)
-  decoded = step2FaceModel({
-    'stepsDataInput': latent,
-  })
-
-  # Define the full model
-  autoencoder = tf.keras.Model(
-    inputs={
-      'points': points,
-      'left eye': eyeL,
-      'right eye': eyeR,
-    },
-    outputs=decoded,
-    name='face_autoencoder'
-  )
-
-  return {
-    'encoder': face2StepModel,
-    'decoder': step2FaceModel,
-    'main': autoencoder,
-    'inputs specification': {
-      'points': tf.TensorSpec(shape=(None, None, 478, 2), dtype=tf.float32),
-      'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
-      'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
-    }
-  }
 
 def _InputSpec():
   return {
@@ -226,24 +130,40 @@ def _InputSpec():
     'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
     'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
     'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
+    'userId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
+    'placeId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
+    'screenId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
   }
 
-def Face2LatentModel(pointsN=478, eyeSize=32, steps=None, latentSize=64):
+def Face2LatentModel(
+  pointsN=478, eyeSize=32, steps=None, latentSize=64,
+  embeddings=None
+):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
   eyeR = L.Input((steps, eyeSize, eyeSize, 1))
   T = L.Input((steps, 1))
-
-  Face2Step = Face2StepModel(pointsN, eyeSize, latentSize)
-  Step2Latent = Step2LatentModel(latentSize)
+  userIdEmb = L.Input((steps, embeddings['size']))
+  placeIdEmb = L.Input((steps, embeddings['size']))
+  screenIdEmb = L.Input((steps, embeddings['size']))
+  
+  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
+  
+  Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize=emb.shape[-1])
+  Step2Latent = Step2LatentModel(latentSize, embeddingsSize=emb.shape[-1])
 
   stepsData = Face2Step({
+    'embeddings': emb,
     'points': points,
     'left eye': eyeL,
     'right eye': eyeR,
   })
   
-  res = Step2Latent([stepsData['latent'], T])
+  res = Step2Latent({
+    'latent': stepsData['latent'],
+    'time': T,
+    'embeddings': emb,
+  })
   res['intermediate'] = {
     **stepsData['intermediate'],
     **res['intermediate'],
@@ -255,7 +175,10 @@ def Face2LatentModel(pointsN=478, eyeSize=32, steps=None, latentSize=64):
     'points': points,
     'left eye': eyeL,
     'right eye': eyeR,
-    'time': T
+    'time': T,
+    'userId': userIdEmb,
+    'placeId': placeIdEmb,
+    'screenId': screenIdEmb,
   }
 
   intermediate = res['intermediate']
@@ -272,16 +195,20 @@ def Face2LatentModel(pointsN=478, eyeSize=32, steps=None, latentSize=64):
   }
   
 if __name__ == '__main__':
-  autoencoder = FaceAutoencoderModel(latentSize=64, means={
-    'points': np.zeros((478, 2), np.float32),
-    'left eye': np.zeros((32, 32), np.float32),
-    'right eye': np.zeros((32, 32), np.float32),
-  })['main']
-  autoencoder.summary(expand_nested=True)
+  # autoencoder = FaceAutoencoderModel(latentSize=64, means={
+  #   'points': np.zeros((478, 2), np.float32),
+  #   'left eye': np.zeros((32, 32), np.float32),
+  #   'right eye': np.zeros((32, 32), np.float32),
+  # })['main']
+  # autoencoder.summary(expand_nested=True)
 
-  # X = Face2LatentModel(steps=5, latentSize=64)
-  # X['main'].summary(expand_nested=True)
-  # X['Face2Step'].summary(expand_nested=False)
-  # X['Step2Latent'].summary(expand_nested=False)
-  # print(X['main'].outputs)
+  X = Face2LatentModel(steps=5, latentSize=64,
+    embeddings={
+      'userId': 1, 'placeId': 1, 'screenId': 1, 'size': 64
+    }
+  )
+  X['main'].summary(expand_nested=True)
+  X['Face2Step'].summary(expand_nested=False)
+  X['Step2Latent'].summary(expand_nested=False)
+  print(X['main'].outputs)
   pass

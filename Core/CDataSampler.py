@@ -164,14 +164,19 @@ class CDataSampler:
   def sample(self, **kwargs):
     kwargs = {**self._defaults, **kwargs}
     timesteps = kwargs.get('timesteps', None)
+    N = kwargs.get('N', self._batchSize)
     indexes = []
-    for _ in range(self._batchSize):
-      idx = self._samples[self._currentSample]
-      self._currentSample = (self._currentSample + 1) % len(self._samples)
+    for _ in range(N):
+      added = False
+      while not added:
+        idx = self._samples[self._currentSample]
+        self._currentSample = (self._currentSample + 1) % len(self._samples)
 
-      sampledSteps = self._stepsFor(idx, steps=timesteps, **kwargs)
-      assert sampledSteps is not False, 'Not enough frames for %d' % idx
-      indexes.extend(sampledSteps)
+        sampledSteps = self._stepsFor(idx, steps=timesteps, **kwargs)
+        if sampledSteps:
+          # TODO: remove from samples?
+          indexes.extend(sampledSteps)
+          added = True
       continue
 
     return self._indexes2XY(indexes, kwargs)
@@ -240,6 +245,13 @@ class CDataSampler:
     ], np.float32), )
     Y = self._reshapeSteps(Y, timesteps)
     ##############
+    userIds = np.unique([x['userId'] for x in samples])
+    assert 1 == len(userIds), 'Only one user is supported. Found: ' + str(userIds)
+    placeIds = np.unique([x['placeId'] for x in samples])
+    assert 1 == len(placeIds), 'Only one place is supported. Found: ' + str(placeIds)
+    screenIds = np.unique([x['screenId'] for x in samples])
+    assert 1 == len(screenIds), 'Only one screen is supported. Found: ' + str(screenIds)
+
     X = DSUtils.toTensor(
       (
         np.array([x['points'] for x in samples], np.float32),
@@ -249,6 +261,7 @@ class CDataSampler:
       ),
       (
         kwargs.get('pointsNoise', 0.0),
+        kwargs.get('pointsDropout', 0.0),
       
         kwargs.get('eyesAdditiveNoise', 0.0),
         kwargs.get('eyesDropout', 0.0),
@@ -256,7 +269,8 @@ class CDataSampler:
         kwargs.get('lightBlobFactor', 0.0),
 
         timesteps
-      )
+      ),
+      userIds[0], placeIds[0], screenIds[0]
     )
     ###############
     (Y, ) = Y

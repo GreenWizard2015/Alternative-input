@@ -56,9 +56,13 @@ class CSamplesStorageChunk:
     return
 
 class CSamplesStorage:
-  def __init__(self):
+  def __init__(self, userId, placeId, screenId):
     self._head = None
     self._latestT = -np.inf
+    # they are the same for all samples, so we store them here to reduce the memory usage
+    self._userId = userId
+    self._placeId = placeId
+    self._screenId = screenId
     return
 
   def __len__(self):
@@ -68,7 +72,12 @@ class CSamplesStorage:
 
   @lru_cache(10000)
   def __getitem__(self, idx):
-    return self._head.get(idx)
+    res = self._head.get(idx)
+    # add userId, placeId, screenId
+    res['userId'] = self._userId
+    res['placeId'] = self._placeId
+    res['screenId'] = self._screenId
+    return res
   
   def add(self, sample):
     if not self._head:
@@ -80,6 +89,7 @@ class CSamplesStorage:
   
   def addBlock(self, samples):
     assert all(isinstance(v, np.ndarray) for v in samples.values())
+    samples = {k: v for k, v in samples.items()} # copy the dictionary
     N = len(samples['time'])
 
     startIndex = len(self)

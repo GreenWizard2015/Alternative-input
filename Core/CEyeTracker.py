@@ -70,16 +70,33 @@ class CEyeTracker:
       'raw': frame,
     }
   
+  def _circleROI(self, pts, padding):
+    # find center  
+    center = pts.mean(axis=0).astype(np.int32)[None]
+    assert center.shape == (1, 2)
+    # find radius
+    diffs = pts - center
+    dist = np.sum(diffs**2, axis=1)
+    radius = np.sqrt(np.max(dist))
+    if radius < 5: return None
+    radius = int(radius * padding)
+    A = center - radius
+    B = center + radius
+    res = np.concatenate([A, B], axis=0)
+    assert res.shape == (2, 2)
+    return res
+
   def _extract(self, image, pts, isBGR):
     sz = (32, 32)
-    padding = 5
-    if len(pts) < 5:
-      return np.zeros(sz, np.uint8), None
+    EMPTY = np.zeros(sz, np.uint8), None
+    if len(pts) < 1: return EMPTY
 
     HW = np.array(image.shape[:2][::-1])
-    A = (pts.min(axis=0) - padding).clip(min=0)
-    B = pts.max(axis=0) + padding
-    B = np.minimum(B, HW)
+    roi = self._circleROI(pts, padding=1.25)
+    if roi is None: return EMPTY
+    A, B = roi
+    A = A.clip(min=0, max=HW)
+    B = B.clip(min=0, max=HW)
     
     rect = np.array([A, B], np.float32) / HW
     crop = image[ A[1]:B[1], A[0]:B[0], ]

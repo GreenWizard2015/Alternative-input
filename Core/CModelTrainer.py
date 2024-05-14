@@ -5,7 +5,7 @@ from Core.CModelWrapper import CModelWrapper
 
 class CModelTrainer(CModelWrapper):
   def __init__(self, timesteps, model='simple', **kwargs):
-    super().__init__(timesteps, model, **kwargs)
+    super().__init__(timesteps, model=model, **kwargs)
     self._compile()
     # add signatures to help tensorflow optimize the graph
     specification = self._modelRaw['inputs specification']
@@ -39,17 +39,19 @@ class CModelTrainer(CModelWrapper):
     loss = tf.sqrt(diff + delta ** 2) - delta
     tf.assert_equal(tf.shape(loss), tf.shape(ytrue))
     return tf.reduce_mean(loss, axis=-1)
-  
+    
   def _trainStep(self, Data):
     print('Instantiate _trainStep')
     ###############
     x, (y, ) = Data
     y = y[..., 0, :]
     losses = {}
-    TV = self._model.trainable_variables
+    parts = list(self._embeddings.values()) + [self._model]
+    TV = sum([p.trainable_variables for p in parts], [])
     with tf.GradientTape(watch_accessed_variables=False) as tape:
       tape.watch(TV)
       data = x['augmented']
+      data = self._replaceByEmbeddings(data)
       predictions = self._model(data, training=True)
       predictions = dict(**predictions['intermediate'], final=predictions['result'])
       for name, pts in predictions.items():
@@ -82,9 +84,10 @@ class CModelTrainer(CModelWrapper):
   def _eval(self, xy):
     print('Instantiate _eval')
     x, (y,) = xy
-    y = y[:, -1, 0]
+    x = self._replaceByEmbeddings(x)
+    y = y[:, :, 0]
     predictions = self._model(x, training=False)
-    points = predictions['result'][:, -1, :]
+    points = predictions['result'][:, :, :]
     tf.assert_equal(tf.shape(points), tf.shape(y))
 
     loss = self._pointLoss(y, points)

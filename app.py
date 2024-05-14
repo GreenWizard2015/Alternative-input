@@ -21,7 +21,7 @@ class App:
   def __init__(
     self, tracker, dataset, predictor, 
     fps=30, hasPredictions=True, 
-    showWebcam=False, showFaceMesh=False, showEyes=False
+    showWebcam=False, showFaceMesh=False, showEyes=not False
   ):
     self._showFaceMesh = showFaceMesh
     self._faceMesh = None
@@ -137,6 +137,7 @@ class App:
     if self._eyesSurface is None: return
 
     def drawPoints(img, points, rect, color=Colors.RED):
+      return img # disabled
       A = rect[0]
       rectDim = rect[1] - A
       # remove points outside of the rect
@@ -335,8 +336,23 @@ class App:
 
 def _modelFromArgs(args):
   if 'none' == args.model.lower(): return None
+  import json
+  stats = {}
+  with open(os.path.join(args.folder, 'stats.json'), 'r') as f:
+    stats = json.load(f)
+
+  # My own ids hardcoded here for simplicity
+  userId = 'd5ea23a9-4a4d-472c-a5ac-2e0091f1c5e5'
+  placeId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
+  screenId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed/1864078267'
   return CModelWrapper(
-    timesteps=args.steps, 
+    timesteps=args.steps,  
+    user=dict(
+      userId=userId,
+      placeId=placeId,
+      screenId=screenId,
+    ),
+    stats=stats,
     weights=dict(folder=args.folder, postfix=args.model)
   )
 

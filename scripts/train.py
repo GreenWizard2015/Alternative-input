@@ -12,7 +12,6 @@ from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
 from Core.CModelTrainer import CModelTrainer
-from Core.CModelCoTrainer import CModelCoTrainer
 import tqdm
 import json
 
@@ -88,7 +87,22 @@ def _modelTrainingLoop(model, dataset):
     with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
-        stats = model.fit(dataset.sample(**sampleParams))
+        sampled = dataset.sample(**sampleParams)
+        assert 2 == len(sampled), 'The dataset should return a tuple with the input and the output'
+        X, Y = sampled
+        assert 'clean' in X, 'The input should contain the clean data'
+        assert 'augmented' in X, 'The input should contain the augmented data'
+        for nm in ['clean', 'augmented']:
+          item = X[nm]
+          assert 'points' in item, 'The input should contain the points'
+          assert 'left eye' in item, 'The input should contain the left eye'
+          assert 'right eye' in item, 'The input should contain the right eye'
+          assert 'time' in item, 'The input should contain the time'
+          assert 'userId' in item, 'The input should contain the userId'
+          assert 'placeId' in item, 'The input should contain the placeId'
+          assert 'screenId' in item, 'The input should contain the screenId'
+          continue
+        stats = model.fit(sampled)
         history['time'].append(stats['time'])
         for k in stats['losses'].keys():
           history[k].append(stats['losses'][k])
@@ -146,11 +160,7 @@ def _schedule_from_json(args):
   return F
 
 def _trainer_from(args):
-  if args.trainer == 'standard': return CModelTrainer
   if args.trainer == 'default': return CModelTrainer
-  if args.trainer == 'cotrainer': return lambda **kwargs: CModelCoTrainer(useEMA=False, **kwargs)
-  if args.trainer == 'cotrainer-ema':
-    return lambda **kwargs: CModelCoTrainer(useEMA=True, eta=args.ema, **kwargs)
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def main(args):
@@ -161,28 +171,28 @@ def main(args):
   else:
     getSampleParams = _schedule_from_json(args)
 
-  trainer = _trainer_from(args)
-  trainDataset = args.trainset
-  if trainDataset is None:
-    trainDataset = os.path.join(folder, 'train.npz')
+  stats = None
+  with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
+    stats = json.load(f)
 
+  trainer = _trainer_from(args)
   trainDataset = CDatasetLoader(
-    trainDataset,
+    os.path.join(folder, 'remote'),
+    stats=stats,
     samplerArgs=dict(
       batch_size=args.batch_size,
       minFrames=timesteps,
+      maxT=1.0,
       defaults=dict(
         timesteps=timesteps,
-        stepsSampling={'max frames': 5},
+        stepsSampling='uniform',
         # no augmentations by default
-        pointsNoise=0.0,
-        eyesDropout=0.1, eyesAdditiveNoise=0.0, brightnessFactor=1.0, lightBlobFactor=1.0,
+        pointsNoise=0.02, pointsDropout=0.1,
+        eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=5.0, lightBlobFactor=5.0,
       ),
     )
   )
-  model = dict(timesteps=timesteps)
-  if args.encoder is not None:
-    model['encoder'] = args.encoder
+  model = dict(timesteps=timesteps, stats=stats)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model)
   if args.modelId is not None:
@@ -228,19 +238,16 @@ if __name__ == '__main__':
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
-  parser.add_argument('--trainset', type=str)
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
-    '--trainer', type=str, default='default', 
-    choices=['default', 'standard', 'cotrainer', 'cotrainer-ema']
+    '--trainer', type=str, default='default',
+    choices=['default']
   )
-  parser.add_argument('--ema', type=float, default=1e-3, help='EMA coefficient for the CoTrainer')
   parser.add_argument(
     '--schedule', type=str, default=None,
     help='JSON file with the scheduler parameters for sampling the training dataset'
   )
   parser.add_argument('--debug', action='store_true')
-  parser.add_argument('--encoder', type=str, default=None)
 
   main(parser.parse_args())
   pass

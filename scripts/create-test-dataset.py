@@ -10,14 +10,29 @@ import Core.Utils as Utils
 from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 from collections import defaultdict
+import glob
+import json
 
 BATCH_SIZE = 128 * 4
-folder = os.path.join(ROOT_FOLDER, 'Data')
+trainIndx = 0
 
-def samplesStream(params, take):
+def samplesStream(params, take, filename, stats):
   if not isinstance(take, list): take = [take]
-  ds = CDataSampler( CSamplesStorage(), defaults=params, batch_size=BATCH_SIZE, minFrames=params['timesteps'] )
-  ds.addBlock(Utils.datasetFrom(os.path.join(folder, 'test.npz')))
+  # filename is "{placeId}/{userId}/{screenId}/train.npz"
+  # extract the placeId, userId, and screenId
+  parts = os.path.split(filename)[0].split(os.path.sep)
+  placeId, userId, screenId = parts[-3], parts[-2], parts[-1]
+  # use the stats to get the numeric values of the placeId, userId, and screenId  
+  ds = CDataSampler(
+    CSamplesStorage(
+      placeId=stats['placeId'].index(placeId),
+      userId=stats['userId'].index(userId),
+      screenId=stats['screenId'].index('%s/%s' % (placeId, screenId))
+    ),
+    defaults=params, 
+    batch_size=BATCH_SIZE, minFrames=params['timesteps'] 
+  )
+  ds.addBlock(Utils.datasetFrom(filename))
   
   N = ds.totalSamples
   for i in range(0, N, BATCH_SIZE):
@@ -36,9 +51,9 @@ def samplesStream(params, take):
     continue
   return
 
-def batches(params, take):
+def batches(*params):
   data = defaultdict(list)
-  for sample in samplesStream(params, take):
+  for sample in samplesStream(*params):
     for k, v in sample.items():
       data[k].append(v)
       continue
@@ -57,29 +72,23 @@ def batches(params, take):
     yield data
   return
 ############################################
-def generateTestDataset(params, outputFolder):
-  # clear output folder
-  if os.path.exists(outputFolder):
-    # remove test-*.npz files
-    for fname in os.listdir(outputFolder):
-      if fname.startswith('test-') and fname.endswith('.npz'):
-        os.remove(os.path.join(outputFolder, fname))
-      continue
-  else:
-    os.makedirs(outputFolder)
+def generateTestDataset(params, filename, stats):
   # generate test dataset
-  print('Generating test dataset to "%s"' % (os.path.basename(outputFolder)))
+  global trainIndx
   ONE_MB = 1024 * 1024
   totalSize = 0
-  for bIndex, batch in enumerate(batches(params, ['clean'])):
-    fname = os.path.join(outputFolder, 'test-%d.npz' % bIndex)
+  if not os.path.exists(os.path.join(ROOT_FOLDER, 'Data', 'test-main')):
+    os.makedirs(os.path.join(ROOT_FOLDER, 'Data', 'test-main'), exist_ok=True)
+  for bIndex, batch in enumerate(batches(params, ['clean'], filename, stats)):
+    fname = os.path.join(ROOT_FOLDER, 'Data', 'test-main', 'test-%d.npz' % trainIndx)
     # concatenate all arrays
     batch = {k: np.concatenate(v, axis=0) for k, v in batch.items()}
-    np.savez(fname, **batch)
+    np.savez_compressed(fname, **batch)
     # get fname size
     size = os.path.getsize(fname)
     totalSize += size
     print('%d | Size: %.1f MB | Total: %.1f MB' % (bIndex + 1, size / ONE_MB, totalSize / ONE_MB))
+    trainIndx += 1
     continue
   print('Done')
   return
@@ -90,11 +99,26 @@ def main(args):
     dict(timesteps=args.steps, stepsSampling='last'),
     # augm(3), augm(4), augm(5),
   ]
+  dataFolder = os.path.join(ROOT_FOLDER, 'Data')
+  folder = os.path.join(ROOT_FOLDER, 'Data', 'remote')
 
-  for i, params in enumerate(PARAMS):
-    outputFolder = os.path.join(folder, 'test-%d' % i)
-    generateTestDataset(params, outputFolder)
+  stats = None
+  with open(os.path.join(folder, 'stats.json'), 'r') as f:
+    stats = json.load(f)
+
+  # remove test-*.npz files
+  for fname in os.listdir(dataFolder):
+    if fname.startswith('test-') and fname.endswith('.npz'):
+      os.remove(os.path.join(dataFolder, fname))
     continue
+  # recursively find the train file
+  trainFilename = glob.glob(os.path.join(folder, '**', 'train.npz'), recursive=True)
+  print('Found train files:', len(trainFilename))
+  for filename in trainFilename:
+    print('Processing', filename)
+    for i, params in enumerate(PARAMS):
+      generateTestDataset(params, filename, stats)
+      continue
   return
 
 if __name__ == '__main__':

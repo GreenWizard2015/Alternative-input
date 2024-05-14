@@ -54,13 +54,17 @@ def addLightBlob(imgA, imgB, brightness, shared):
       tf.TensorSpec(shape=(None, None, None), dtype=tf.float32),
       tf.TensorSpec(shape=(None, 1), dtype=tf.float32),
     ),
-    tf.TensorSpec(shape=(6,), dtype=tf.float32),
+    tf.TensorSpec(shape=(7,), dtype=tf.float32),
+    # userId, placeId, screenId
+    tf.TensorSpec(shape=(), dtype=tf.int32),
+    tf.TensorSpec(shape=(), dtype=tf.int32),
+    tf.TensorSpec(shape=(), dtype=tf.int32),
   ]
 )
-def toTensor(data, params):
+def toTensor(data, params, userId, placeId, screenId):
   print('Instantiate CDataSampler_utils.toTensor')
   (
-    pointsNoise, 
+    pointsNoise, pointsDropout,
     eyesAdditiveNoise, eyesDropout,
     brightnessFactor, lightBlobFactor,
     timesteps
@@ -70,6 +74,9 @@ def toTensor(data, params):
   N = tf.shape(points)[0]
   imgA = tf.cast(imgA, tf.float32) / 255.
   imgB = tf.cast(imgB, tf.float32) / 255.
+  userId = tf.fill((N, 1), userId)
+  placeId = tf.fill((N, 1), placeId)
+  screenId = tf.fill((N, 1), screenId)
   
   reshape = lambda x: tf.reshape(
     x,
@@ -80,6 +87,9 @@ def toTensor(data, params):
     'points': reshape(points),
     'left eye': reshape(imgA),
     'right eye': reshape(imgB),
+    'userId': reshape(userId),
+    'placeId': reshape(placeId),
+    'screenId': reshape(screenId),
   }
   ##########################
   def clip(x): return tf.clip_by_value(x, 0., 1.)
@@ -119,6 +129,11 @@ def toTensor(data, params):
   if 0.0 < pointsNoise:
     points += tf.random.normal(tf.shape(points), stddev=pointsNoise)
 
+  # dropouts
+  if 0.0 < pointsDropout:
+    mask = tf.random.uniform((N, tf.shape(points)[1])) < pointsDropout
+    points = tf.where(mask[:, :, None], FACE_MESH_INVALID_VALUE, points)
+
   points = tf.where(validPointsMask, points, FACE_MESH_INVALID_VALUE)
   ##########################
   return {
@@ -127,6 +142,9 @@ def toTensor(data, params):
       'points': reshape(points),
       'left eye': reshape(imgA),
       'right eye': reshape(imgB),
+      'userId': reshape(userId),
+      'placeId': reshape(placeId),
+      'screenId': reshape(screenId),
     },
     'clean': clean,
   }
