@@ -99,7 +99,7 @@ def saveChunk(samples, folder):
   assert 1 == len(screenId), 'Expecting a single screenId'
 
   myfolder = os.path.join(
-    folder, userId[0], placeId[0], str(screenId[0])
+    folder, placeId[0], userId[0], str(screenId[0])
   )
   if not os.path.exists(myfolder): os.makedirs(myfolder, exist_ok=True)
   start_time = samples['time'][0]
@@ -115,7 +115,7 @@ def splitByID(samples):
     userId = sample['userId']
     placeId = sample['placeId']
     screenId = sample['screenId']
-    key = '%s/%s/%s' % (userId, placeId, screenId)
+    key = '%s/%s/%s' % (placeId, userId, screenId)
     if key not in res:
       res[key] = []
     res[key].append(sample)
