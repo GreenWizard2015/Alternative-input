@@ -26,8 +26,25 @@ folder = os.path.join(ROOT_FOLDER, 'Data')
 def deserialize(buffer):
   offset = 0
   samples = []
+  # read header (uint8)
+  version = np.frombuffer(buffer, dtype=np.uint8, count=1, offset=offset)
+  if version[0] != 1:
+    raise ValueError('Invalid version %d' % version[0])
+  offset += 1
+
+  userId = buffer[offset:offset+36].decode('utf-8')
+  offset += 36
+  placeId = buffer[offset:offset+36].decode('utf-8')
+  offset += 36
+  screenId = buffer[offset:offset+36].decode('utf-8')
+  offset += 36
+  # read samples
   while offset < len(buffer):
-    sample = {}
+    sample = {
+      'userId': userId,
+      'placeId': placeId,
+      'screenId': screenId,
+    }
     
     # Read time (uint32)
     time_data = np.frombuffer(buffer, dtype='>I', count=1, offset=offset)
@@ -54,22 +71,10 @@ def deserialize(buffer):
     sample['goal'] = goal = np.frombuffer(buffer, dtype='>f4', count=2, offset=offset)
     offset += 4 * 2
     
-    # Read userId (36 bytes as string)
-    sample['userId'] = buffer[offset:offset+36].decode('utf-8')
-    offset += 36
-    
-    # Read placeId (36 bytes as string)
-    sample['placeId'] = buffer[offset:offset+36].decode('utf-8')
-    offset += 36
-    
-    # Read screenId (int32)
-    sample['screenId'] = buffer[offset:offset+36].decode('utf-8')
-    offset += 36
-    
-    if (-2 < sample['goal']).all() and (sample['goal'] < 2).all():
+    if (-2 < goal).all() and (goal < 2).all():
       samples.append(sample)
     else:
-      print('Invalid goal:', sample['goal'])
+      print('Invalid goal:', goal)
     continue
 
   # Transpose them to the make columnwise
