@@ -90,6 +90,19 @@ def deserialize(buffer):
   res['right eye'] = res.pop('rightEye')
   return res
 
+def find_free_name(folder, base_name, extension=".npz"):
+  counter = 0
+  while True:
+    if counter == 0:
+      file_name = f"{base_name}{extension}"
+    else:
+      file_name = f"{base_name}_{counter}{extension}"
+    
+    file_path = os.path.join(folder, file_name)
+    if not os.path.exists(file_path):
+      return file_path
+    counter += 1
+
 def saveChunk(samples, folder):
   # check time is increasing monotonically
   time = samples['time']
@@ -108,7 +121,8 @@ def saveChunk(samples, folder):
   )
   if not os.path.exists(myfolder): os.makedirs(myfolder, exist_ok=True)
   start_time = samples['time'][0]
-  np.savez_compressed(os.path.join(myfolder, str(start_time) + '.npz'), **samples)
+  fname = find_free_name(myfolder, str(start_time), extension='.npz')
+  np.savez_compressed(fname, **samples)
   return
 
 def splitByID(samples):
@@ -152,6 +166,7 @@ def main(args):
     with gzip.open(content, 'rb') as f:
       first_file = f.read()
       samples = deserialize(first_file)
+      print('Size: ', len(first_file))
       print('Read %d samples from %s' % (len(samples['time']), file))
 
       # don't want to messing up with such cases

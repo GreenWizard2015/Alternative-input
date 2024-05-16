@@ -112,8 +112,8 @@ def main(args):
       os.remove(os.path.join(dataFolder, fname))
     continue
   # recursively find the train file
-  trainFilename = glob.glob(os.path.join(folder, '**', 'train.npz'), recursive=True)
-  print('Found train files:', len(trainFilename))
+  trainFilename = glob.glob(os.path.join(folder, '**', 'test.npz'), recursive=True)
+  print('Found test files:', len(trainFilename))
   for filename in trainFilename:
     print('Processing', filename)
     for i, params in enumerate(PARAMS):
