@@ -183,13 +183,17 @@ def main(args):
   foldersList = lambda x: [nm for nm in os.listdir(x) if os.path.isdir(os.path.join(x, nm))]
   subfolders = foldersList(folder)
   for placeId in subfolders:
-    stats['placeId'].append(placeId)
+    if not (placeId in stats['placeId']):
+      stats['placeId'].append(placeId)
     userIds = foldersList(os.path.join(folder, placeId))
     for userId in userIds:
-      stats['userId'].append(userId)
+      if not (userId in stats['userId']):
+        stats['userId'].append(userId)
       screenIds = foldersList(os.path.join(folder, placeId, userId))
       for screenId in screenIds:
-        stats['screenId'].append('%s/%s' % (placeId, screenId))
+        sid = '%s/%s' % (placeId, screenId)
+        if not (sid in stats['screenId']):
+          stats['screenId'].append(sid)
         path = os.path.join(folder, placeId, userId, screenId)
         testFramesN, trainFramesN = processFolder(
           path, 
