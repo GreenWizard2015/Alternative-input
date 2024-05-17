@@ -166,7 +166,6 @@ def main(args):
     with gzip.open(content, 'rb') as f:
       first_file = f.read()
       samples = deserialize(first_file)
-      print('Size: ', len(first_file))
       print('Read %d samples from %s' % (len(samples['time']), file))
 
       # don't want to messing up with such cases

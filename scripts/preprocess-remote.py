@@ -169,8 +169,7 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   saveSubset('test.npz', testing)
 
   print('Processing ', folder, 'done')
-  return
-
+  return len(testing), len(training)
 
 def main(args):
   stats = {
@@ -178,6 +177,7 @@ def main(args):
     'userId': [],
     'screenId': [],
   }
+  testFrames = trainFrames = 0
   # subfolders: PlaceId -> UserId -> ScreenId -> start_time.npz
   folder = args.folder
   foldersList = lambda x: [nm for nm in os.listdir(x) if os.path.isdir(os.path.join(x, nm))]
@@ -191,12 +191,15 @@ def main(args):
       for screenId in screenIds:
         stats['screenId'].append('%s/%s' % (placeId, screenId))
         path = os.path.join(folder, placeId, userId, screenId)
-        processFolder(
+        testFramesN, trainFramesN = processFolder(
           path, 
           args.time_delta, args.test_ratio, args.frames_per_chunk,
           args.test_padding, args.skipped_frames
         )
+        testFrames += testFramesN
+        trainFrames += trainFramesN
       continue
+  print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
   # save the stats
   with open(os.path.join(folder, 'stats.json'), 'w') as f:
