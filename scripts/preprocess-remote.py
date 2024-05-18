@@ -178,6 +178,7 @@ def main(args):
     'screenId': [],
   }
   testFrames = trainFrames = 0
+  framesPerChunk = {}
   # subfolders: PlaceId -> UserId -> ScreenId -> start_time.npz
   folder = args.folder
   foldersList = lambda x: [nm for nm in os.listdir(x) if os.path.isdir(os.path.join(x, nm))]
@@ -202,12 +203,19 @@ def main(args):
         )
         testFrames += testFramesN
         trainFrames += trainFramesN
+        # store the number of frames per chunk
+        sid = '%s/%s/%s' % (placeId, userId, screenId)
+        framesPerChunk[sid] = testFramesN + trainFramesN
       continue
   print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
   # save the stats
   with open(os.path.join(folder, 'stats.json'), 'w') as f:
     json.dump(stats, f, indent=2)
+
+  print('-' * 80)
+  for k, v in framesPerChunk.items():
+    print('%s: %d frames' % (k, v))
   return
 
 if __name__ == '__main__':
