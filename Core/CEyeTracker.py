@@ -92,7 +92,7 @@ class CEyeTracker:
     if len(pts) < 1: return EMPTY
 
     HW = np.array(image.shape[:2][::-1])
-    roi = self._circleROI(pts, padding=1.25)
+    roi = self._circleROI(pts, padding=1.5)
     if roi is None: return EMPTY
     A, B = roi
     A = A.clip(min=0, max=HW)
@@ -103,8 +103,11 @@ class CEyeTracker:
     if np.min(crop.shape[:2]) < 8:
       return np.zeros(sz, np.uint8), rect
     
-    crop = cv2.resize(crop, sz)
+    crop = cv2.resize(crop, (48, 48)) # 48x48, not 32x32
     crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY if isBGR else cv2.COLOR_RGB2GRAY)
+    # center crop 32x32
+    d = (48 - 32) // 2
+    crop = crop[d:d+32, d:d+32]
     return crop.astype(np.uint8), rect
   
   def _processFace(self, pose, image):

@@ -74,6 +74,8 @@ def toTensor(data, params, userId, placeId, screenId):
   N = tf.shape(points)[0]
   imgA = tf.cast(imgA, tf.float32) / 255.
   imgB = tf.cast(imgB, tf.float32) / 255.
+  tf.assert_equal(tf.shape(imgA), (N, 48, 48))
+  tf.assert_equal(tf.shape(imgA), tf.shape(imgB))
   userId = tf.fill((N, 1), userId)
   placeId = tf.fill((N, 1), placeId)
   screenId = tf.fill((N, 1), screenId)
@@ -82,15 +84,44 @@ def toTensor(data, params, userId, placeId, screenId):
     x,
     tf.concat([(N // timesteps, timesteps), tf.shape(x)[1:]], axis=-1)
   )
+  # apply center crop
+  fraction = 32.0 / 48.0
+  pos = tf.constant(
+    [[0.5 - fraction / 2, 0.5 - fraction / 2, 0.5 + fraction / 2, 0.5 + fraction / 2]],
+    dtype=tf.float32
+  )
+  pos = tf.tile(pos, [N, 1])
+  withCrop = lambda x: tf.image.crop_and_resize(
+    x[..., None],
+    boxes=pos,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
+
   clean = {
     'time': reshape(T),
     'points': reshape(points),
-    'left eye': reshape(imgA),
-    'right eye': reshape(imgB),
+    'left eye': reshape(withCrop(imgA)),
+    'right eye': reshape(withCrop(imgB)),
     'userId': reshape(userId),
     'placeId': reshape(placeId),
     'screenId': reshape(screenId),
   }
+  ##########################
+  # random crop 32x32 eyes
+  fraction = 32.0 / 48.0
+  pos = tf.random.uniform((N, 2), minval=0.0, maxval=1.0 - fraction)
+  boxes = tf.concat([pos, pos + fraction], axis=-1)
+  tf.assert_equal(tf.shape(boxes), (N, 4))
+  imgA = tf.image.crop_and_resize(
+    imgA[..., None],
+    boxes=boxes,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
+  imgB = tf.image.crop_and_resize(
+    imgB[..., None],
+    boxes=boxes,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
   ##########################
   def clip(x): return tf.clip_by_value(x, 0., 1.)
 

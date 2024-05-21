@@ -27,8 +27,8 @@ def deserialize(buffer):
   offset = 0
   samples = []
   # read header (uint8)
-  version = np.frombuffer(buffer, dtype=np.uint8, count=1, offset=offset)
-  if version[0] != 1:
+  version = np.frombuffer(buffer, dtype=np.uint8, count=1, offset=offset)[0]
+  if not (version in [2]): # only version 2 is supported
     raise ValueError('Invalid version %d' % version[0])
   offset += 1
 
@@ -38,6 +38,8 @@ def deserialize(buffer):
   offset += 36
   screenId = buffer[offset:offset+36].decode('utf-8')
   offset += 36
+
+  EYE_SIZE = 32 if 1 == version else 48
   # read samples
   while offset < len(buffer):
     sample = {
@@ -51,15 +53,16 @@ def deserialize(buffer):
     sample['time'] = time_data[0]
     offset += 4
     
-    # Read leftEye (1024 uint8)
-    sample['leftEye'] = np.frombuffer(buffer, dtype=np.uint8, count=32*32, offset=offset) \
-      .reshape(32, 32)
-    offset += 32 * 32
+    # Read leftEye (uint8)
+    EYE_COUNT = EYE_SIZE * EYE_SIZE
+    sample['leftEye'] = np.frombuffer(buffer, dtype=np.uint8, count=EYE_COUNT, offset=offset) \
+      .reshape(EYE_SIZE, EYE_SIZE)
+    offset += EYE_COUNT
     
-    # Read rightEye (1024 uint8)
-    sample['rightEye'] = np.frombuffer(buffer, dtype=np.uint8, count=32*32, offset=offset) \
-      .reshape(32, 32)
-    offset += 32 * 32
+    # Read rightEye (uint8)
+    sample['rightEye'] = np.frombuffer(buffer, dtype=np.uint8, count=EYE_COUNT, offset=offset) \
+      .reshape(EYE_SIZE, EYE_SIZE)
+    offset += EYE_COUNT
     
     # Read points (float32)
     sample['points'] = np.frombuffer(buffer, dtype='>f4', count=2*478, offset=offset) \
@@ -88,6 +91,18 @@ def deserialize(buffer):
   # rename "leftEye" and "rightEye" to "left eye" and "right eye"
   res['left eye'] = res.pop('leftEye')
   res['right eye'] = res.pop('rightEye')
+  if 1 == version: # upscale to 48x48
+    import cv2
+    res['left eye'] = np.stack(
+      [cv2.resize(img[..., None], (48, 48)) for img in res['left eye']]
+    )
+    res['right eye'] = np.stack([
+      cv2.resize(img[..., None], (48, 48)) for img in res['right eye']
+    ])
+    pass
+  
+  assert res['left eye'].shape[1:] == (48, 48), 'Invalid shape for left eye. Got %s' % str(res['left eye'].shape)
+  assert res['right eye'].shape[1:] == (48, 48), 'Invalid shape for right eye. Got %s' % str(res['right eye'].shape)
   return res
 
 def find_free_name(folder, base_name, extension=".npz"):
@@ -158,15 +173,17 @@ def main(args):
   shutil.rmtree(os.path.join(folder, 'remote'), ignore_errors=True)
   # get the list of files from the remote server
   urls = requests.get(args.url).json()
-  print('Found %d files on the remote server' % len(urls))
-  for file in urls:
+  N = len(urls)
+  L = len(str(N))
+  print('Found %d files on the remote server' % N)
+  for i, file in enumerate(urls):
     response = requests.get(file)
     content = IO.BytesIO(response.content)
     # read first file in the gz archive
     with gzip.open(content, 'rb') as f:
       first_file = f.read()
       samples = deserialize(first_file)
-      print('Read %d samples from %s' % (len(samples['time']), file))
+      print(f'[{i:0{L}d}/{N:0{L}d}] Read {len(samples["time"])} samples from {file}')
 
       # don't want to messing up with such cases
       userId = np.unique(samples['userId'])
@@ -182,7 +199,6 @@ def main(args):
         saveChunk(chunk, os.path.join(folder, 'remote'))
         continue
       pass
-
   return
 
 if __name__ == '__main__':
