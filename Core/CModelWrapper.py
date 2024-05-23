@@ -82,17 +82,18 @@ class CModelWrapper:
     np.savez_compressed(path.replace('.h5', '-embeddings.npz'), **embeddings)
     return
     
-  def load(self, folder=None, postfix=''):
+  def load(self, folder=None, postfix='', embeddings=False):
     path = self._modelFilename(folder, postfix)
     self._model.load_weights(path)
-    embeddings = np.load(path.replace('.h5', '-embeddings.npz'))
-    for nm in self._embeddings.keys(): # recreate embeddings
-      w = embeddings[nm]
-      emb = L.Embedding(w.shape[0], w.shape[1])
-      emb.build((None, 1))
-      emb.set_weights([w])
-      self._embeddings[nm] = emb # replace
-      continue
+    if embeddings:
+      embeddings = np.load(path.replace('.h5', '-embeddings.npz'))
+      for nm in self._embeddings.keys(): # recreate embeddings
+        w = embeddings[nm]
+        emb = L.Embedding(w.shape[0], w.shape[1])
+        emb.build((None, 1))
+        emb.set_weights([w])
+        self._embeddings[nm] = emb # replace
+        continue
     return
   
   def lock(self, isLocked):
