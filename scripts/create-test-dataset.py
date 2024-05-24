@@ -72,15 +72,15 @@ def batches(*params):
     yield data
   return
 ############################################
-def generateTestDataset(params, filename, stats):
+def generateTestDataset(params, filename, stats, outputFolder):
   # generate test dataset
   global trainIndx
   ONE_MB = 1024 * 1024
   totalSize = 0
-  if not os.path.exists(os.path.join(ROOT_FOLDER, 'Data', 'test-main')):
-    os.makedirs(os.path.join(ROOT_FOLDER, 'Data', 'test-main'), exist_ok=True)
+  if not os.path.exists(outputFolder):
+    os.makedirs(outputFolder, exist_ok=True)
   for bIndex, batch in enumerate(batches(params, ['clean'], filename, stats)):
-    fname = os.path.join(ROOT_FOLDER, 'Data', 'test-main', 'test-%d.npz' % trainIndx)
+    fname = os.path.join(outputFolder, 'test-%d.npz' % trainIndx)
     # concatenate all arrays
     batch = {k: np.concatenate(v, axis=0) for k, v in batch.items()}
     np.savez_compressed(fname, **batch)
@@ -106,10 +106,9 @@ def main(args):
   with open(os.path.join(folder, 'stats.json'), 'r') as f:
     stats = json.load(f)
 
-  # remove test-*.npz files
-  for fname in os.listdir(dataFolder):
-    if fname.startswith('test-') and fname.endswith('.npz'):
-      os.remove(os.path.join(dataFolder, fname))
+  # remove test-*.npz files from the test-main folder
+  for fname in glob.glob(os.path.join(args.output, 'test-*.npz')):
+    os.remove(fname)
     continue
   # recursively find the train file
   trainFilename = glob.glob(os.path.join(folder, '**', 'test.npz'), recursive=True)
@@ -117,7 +116,7 @@ def main(args):
   for filename in trainFilename:
     print('Processing', filename)
     for i, params in enumerate(PARAMS):
-      generateTestDataset(params, filename, stats)
+      generateTestDataset(params, filename, stats, outputFolder=args.output)
       continue
   return
 
@@ -125,7 +124,10 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--steps', type=int, default=5, help='Number of timesteps')
   parser.add_argument('--batch-size', type=int, default=512, help='Batch size of the test dataset')
-
+  parser.add_argument(
+    '--output', type=str, help='Output folder',
+    default=os.path.join(ROOT_FOLDER, 'Data', 'test-main')
+  )
   args = parser.parse_args()
   BATCH_SIZE = args.batch_size # TODO: fix this hack
   main(args)
