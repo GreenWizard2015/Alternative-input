@@ -99,7 +99,6 @@ def main(args):
     dict(timesteps=args.steps, stepsSampling='last'),
     # augm(3), augm(4), augm(5),
   ]
-  dataFolder = os.path.join(ROOT_FOLDER, 'Data')
   folder = os.path.join(ROOT_FOLDER, 'Data', 'remote')
 
   stats = None
@@ -113,10 +112,11 @@ def main(args):
   # recursively find the train file
   trainFilename = glob.glob(os.path.join(folder, '**', 'test.npz'), recursive=True)
   print('Found test files:', len(trainFilename))
-  for filename in trainFilename:
+  for idx, filename in enumerate(trainFilename):
     print('Processing', filename)
-    for i, params in enumerate(PARAMS):
-      generateTestDataset(params, filename, stats, outputFolder=args.output)
+    for params in PARAMS:
+      targetFolder = os.path.join(args.output, 'test-%d' % idx)
+      generateTestDataset(params, filename, stats, outputFolder=targetFolder)
       continue
   return
 

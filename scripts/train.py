@@ -14,6 +14,7 @@ import time
 from Core.CModelTrainer import CModelTrainer
 import tqdm
 import json
+import glob
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -71,13 +72,16 @@ def _eval(dataset, model, plotFilename, args):
   return loss, dist, T
 
 def evaluate(datasets, model, folder, args):
-  totalLoss = 0.0
+  totalLoss = totalDist = 0.0
   for i, dataset in enumerate(datasets):
     loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
     print('Test %d / %d | %.2f sec | Loss: %.5f. Distance: %.5f' % (i + 1, len(datasets), T, loss, dist))
     totalLoss += loss
+    totalDist += dist
     continue
-  print('Mean loss: %.5f' % (totalLoss / len(datasets), ))
+  print('Mean loss: %.5f | Mean distance: %.5f' % (
+    totalLoss / len(datasets), totalDist / len(datasets)
+  ))
   return totalLoss / len(datasets)
 
 def _modelTrainingLoop(model, dataset):
@@ -201,9 +205,10 @@ def main(args):
   model = trainer(**model)
   model._model.summary()
 
+  # find folders with the name "/test-*/"
   evalDatasets = [
-    CTestLoader(os.path.join(folder, nm))
-    for nm in os.listdir(folder) if nm.startswith('test-')
+    CTestLoader(nm)
+    for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
   ]
   bestLoss = evaluate(evalDatasets, model, folder, args)
   bestEpoch = 0
