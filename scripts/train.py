@@ -237,7 +237,7 @@ if __name__ == '__main__':
   parser.add_argument('--patience', type=int, default=15)
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
-  parser.add_argument('--embeddings', type=bool, default=False, action='store_true')
+  parser.add_argument('--embeddings', default=False, action='store_true')
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
