@@ -71,18 +71,29 @@ def _eval(dataset, model, plotFilename, args):
   T = time.time() - T
   return loss, dist, T
 
-def evaluate(datasets, model, folder, args):
-  totalLoss = totalDist = 0.0
-  for i, dataset in enumerate(datasets):
-    loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
-    print('Test %d / %d | %.2f sec | Loss: %.5f. Distance: %.5f' % (i + 1, len(datasets), T, loss, dist))
-    totalLoss += loss
-    totalDist += dist
-    continue
-  print('Mean loss: %.5f | Mean distance: %.5f' % (
-    totalLoss / len(datasets), totalDist / len(datasets)
-  ))
-  return totalLoss / len(datasets)
+def evaluator(datasets, model, folder, args):
+  losses = [np.inf] * len(datasets) # initialize with infinity
+  def evaluate():
+    totalLoss = totalDist = 0.0
+    for i, dataset in enumerate(datasets):
+      loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
+      print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f' % (
+        i + 1, len(datasets), T, loss, losses[i], dist
+      ))
+      if loss < losses[i]:
+        print('Improved %.5f => %.5f' % (losses[i], loss))
+        model.save(folder, postfix='best-%d' % i) # save the model separately
+        losses[i] = loss
+        pass
+
+      totalLoss += loss
+      totalDist += dist
+      continue
+    print('Mean loss: %.5f | Mean distance: %.5f' % (
+      totalLoss / len(datasets), totalDist / len(datasets)
+    ))
+    return totalLoss / len(datasets)
+  return evaluate
 
 def _modelTrainingLoop(model, dataset):
   def F(desc, sampleParams):
@@ -167,6 +178,25 @@ def _trainer_from(args):
   if args.trainer == 'default': return CModelTrainer
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
+def averageModels(folder, model, noiseStd=0.0):
+  TV = [np.zeros_like(x) for x in model._model.get_weights()]
+  N = 0
+  for nm in glob.glob(os.path.join(folder, '*.h5')):
+    if not('best' in nm): continue # only the best models
+    model.load(nm, embeddings=True)
+    # add the weights to the total
+    weights = model._model.get_weights()
+    for i in range(len(TV)):
+      TV[i] += weights[i]
+      continue
+    N += 1
+    continue
+
+  # average the weights
+  TV = [(x / N) + np.random.normal(0.0, noiseStd, x.shape) for x in TV]
+  model._model.set_weights(TV)
+  return
+
 def main(args):
   timesteps = args.steps
   folder = os.path.join(args.folder, 'Data')
@@ -205,12 +235,15 @@ def main(args):
   model = trainer(**model)
   model._model.summary()
 
+  if args.average:
+    averageModels(folder, model)
   # find folders with the name "/test-*/"
   evalDatasets = [
     CTestLoader(nm)
     for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
   ]
-  bestLoss = evaluate(evalDatasets, model, folder, args)
+  eval = evaluator(evalDatasets, model, folder, args)
+  bestLoss = eval()
   bestEpoch = 0
   trainStep = _modelTrainingLoop(model, trainDataset)
   for epoch in range(args.epochs):
@@ -220,7 +253,7 @@ def main(args):
     )
     model.save(folder, postfix='latest')
     
-    testLoss = evaluate(evalDatasets, model, folder, args)
+    testLoss = eval()
     if testLoss < bestLoss:
       print('Improved %.5f => %.5f' % (bestLoss, testLoss))
       bestLoss = testLoss
@@ -230,8 +263,15 @@ def main(args):
 
     print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
     if args.patience <= (epoch - bestEpoch):
-      print('Early stopping')
-      break
+      if 'stop' == args.on_patience:
+        print('Early stopping')
+        break
+      if 'reset' == args.on_patience:
+        print('Resetting the model to the average of the best models')
+        # and add some noise
+        averageModels(folder, model, noiseStd=0.01)
+        bestEpoch = epoch
+        continue
     continue
   return
 
@@ -239,10 +279,15 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--epochs', type=int, default=1000)
   parser.add_argument('--batch-size', type=int, default=64)
-  parser.add_argument('--patience', type=int, default=15)
+  parser.add_argument('--patience', type=int, default=5)
+  parser.add_argument('--on-patience', type=str, default='stop', choices=['stop', 'reset'])
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
   parser.add_argument('--embeddings', default=False, action='store_true')
+  parser.add_argument(
+    '--average', default=False, action='store_true',
+    help='Load each model from the folder and average them weights'
+  )
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
   parser.add_argument('--modelId', type=str)
   parser.add_argument(

@@ -83,7 +83,7 @@ class CModelWrapper:
     return
     
   def load(self, folder=None, postfix='', embeddings=False):
-    path = self._modelFilename(folder, postfix)
+    path = self._modelFilename(folder, postfix) if not os.path.isfile(folder) else folder
     self._model.load_weights(path)
     if embeddings:
       embeddings = np.load(path.replace('.h5', '-embeddings.npz'))
