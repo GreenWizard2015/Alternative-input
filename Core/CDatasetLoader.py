@@ -34,12 +34,26 @@ class CDatasetLoader:
       continue
     
     print('Loaded %d datasets' % (len(self._datasets), ))
-    print('Total samples: %d' % sum(ds.totalSamples for ds in self._datasets))
+    validSamples = {
+      i: len(ds.validSamples())
+      for i, ds in enumerate(self._datasets)
+    }
+    dtype = np.uint8 if len(self._datasets) < 256 else np.uint32
+    # create an array of dataset indices to sample from
+    self._indices = np.concatenate([
+      np.full((v, ), k, dtype=dtype) # id of the dataset
+      for k, v in validSamples.items()
+    ])
+    self._currentId = 0
 
     self._batchSize = samplerArgs.get('batch_size', 16)
     return
   
   def on_epoch_start(self):
+    # shuffle the indices at the beginning of each epoch
+    self._currentId = 0
+    np.random.shuffle(self._indices)
+    # reset all datasets
     for ds in self._datasets:
       ds.reset()
       continue
@@ -49,23 +63,37 @@ class CDatasetLoader:
     return
 
   def __len__(self):
-    return sum(len(ds) for ds in self._datasets)
+    return 1 + (len(self._indices) // self._batchSize)
   
+  def _getBatchStats(self, batchSize):
+    batch = self._indices[self._currentId:self._currentId + batchSize]
+    self._currentId = (self._currentId + batchSize) % len(self._indices)
+    while len(batch) < batchSize:
+      batch2 = self._indices[:batchSize - len(batch)]
+      self._currentId = (self._currentId + len(batch2)) % len(self._indices)
+      batch = np.concatenate([batch, batch2], axis=0) # concatenate the two batches
+      continue
+
+    assert len(batch) == batchSize, 'Invalid batch size: %d != %d' % (len(batch), batchSize)
+    datasetIds, counts = np.unique(batch, return_counts=True)
+    return datasetIds, counts
+
   def sample(self, **kwargs):
     batchSize = kwargs.get('batch_size', self._batchSize)
-    N = batchSize // len(self._datasets)
-    if N < 1: N = 1
     resX = []
     resY = []
     totalSamples = 0
-    while totalSamples < batchSize:
-      datasetIdx = np.random.randint(0, len(self._datasets))
-      dataset = self._datasets[datasetIdx]
-      x, (y, ) = dataset.sample(N=min(N, batchSize - totalSamples), **kwargs)
+    # find the datasets ids and the number of samples to take from each dataset
+    datasetIds, counts = self._getBatchStats(batchSize)
+    for datasetId, N in zip(datasetIds, counts):
+      dataset = self._datasets[datasetId]
+      x, (y, ) = dataset.sample(N=N, **kwargs)
+      assert len(y) == N, 'Invalid number of samples: %d != %d' % (len(y), N)
       resX.append(x)
       resY.append(y)
       totalSamples += len(y)
       continue
+    
     resY = np.concatenate(resY, axis=0)
     assert resY.shape[0] == batchSize, 'Invalid shape: %s' % (resY.shape, )
     assert resY.shape[-1] == 2, 'Invalid shape: %s' % (resY.shape, )
