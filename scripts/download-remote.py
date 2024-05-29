@@ -168,6 +168,27 @@ def splitByID(samples):
 
   return res
 
+def fetch(cache=None):
+  def fromServer(url):
+    response = requests.get(url)
+    return IO.BytesIO(response.content), False
+  
+  def cached(url):
+    name = os.path.basename(url)
+    cache_file = os.path.join(cache, name)
+    if os.path.exists(cache_file):
+      with open(cache_file, 'rb') as f:
+        return IO.BytesIO(f.read()), True # read from the cache
+      
+    response, _ = fromServer(url)
+    with open(cache_file, 'wb') as f: # save to the cache
+      f.write(response)
+    return response, False
+  
+  if cache is not None:
+    return cached
+  return fromServer
+
 def main(args):
   # Clear the folder
   shutil.rmtree(os.path.join(folder, 'remote'), ignore_errors=True)
@@ -176,14 +197,15 @@ def main(args):
   N = len(urls)
   L = len(str(N))
   print('Found %d files on the remote server' % N)
+  fetcher = fetch(args.cache)
   for i, file in enumerate(urls):
-    response = requests.get(file)
-    content = IO.BytesIO(response.content)
+    content, isCached = fetcher(file)
     # read first file in the gz archive
     with gzip.open(content, 'rb') as f:
       first_file = f.read()
       samples = deserialize(first_file)
-      print(f'[{i:0{L}d}/{N:0{L}d}] Read {len(samples["time"])} samples from {file}')
+      src = 'cache' if isCached else file
+      print(f'[{i:0{L}d}/{N:0{L}d}] Readed {len(samples["time"])} samples from {src}')
 
       # don't want to messing up with such cases
       userId = np.unique(samples['userId'])
@@ -204,6 +226,7 @@ def main(args):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--url', type=str, help='URL to the list of files')
+  parser.add_argument('--cache', type=str, help='Path to the cache folder', default=None)
 
   args = parser.parse_args()
   main(args)
