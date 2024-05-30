@@ -181,9 +181,10 @@ def fetch(cache=None):
         return IO.BytesIO(f.read()), True # read from the cache
       
     response, _ = fromServer(url)
+    content = response.read() # had to read it again, because BytesIO is not seekable
     with open(cache_file, 'wb') as f: # save to the cache
-      f.write(response)
-    return response, False
+      f.write(content)
+    return IO.BytesIO(content), False
   
   if cache is not None:
     return cached
