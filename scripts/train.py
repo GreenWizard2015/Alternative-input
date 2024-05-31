@@ -73,15 +73,16 @@ def _eval(dataset, model, plotFilename, args):
 
 def evaluator(datasets, model, folder, args):
   losses = [np.inf] * len(datasets) # initialize with infinity
-  def evaluate():
+  def evaluate(onlyImproved=False):
     totalLoss = totalDist = 0.0
     for i, dataset in enumerate(datasets):
       loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
-      print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f' % (
-        i + 1, len(datasets), T, loss, losses[i], dist
-      ))
+      if not onlyImproved:
+        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f' % (
+          i + 1, len(datasets), T, loss, losses[i], dist
+        ))
       if loss < losses[i]:
-        print('Improved %.5f => %.5f' % (losses[i], loss))
+        print('Test %d / %d | Improved %.5f => %.5f' % (i + 1, len(datasets), losses[i], loss))
         model.save(folder, postfix='best-%d' % i) # save the model separately
         losses[i] = loss
         pass
@@ -89,9 +90,10 @@ def evaluator(datasets, model, folder, args):
       totalLoss += loss
       totalDist += dist
       continue
-    print('Mean loss: %.5f | Mean distance: %.5f' % (
-      totalLoss / len(datasets), totalDist / len(datasets)
-    ))
+    if not onlyImproved:
+      print('Mean loss: %.5f | Mean distance: %.5f' % (
+        totalLoss / len(datasets), totalDist / len(datasets)
+      ))
     return totalLoss / len(datasets)
   return evaluate
 
@@ -268,10 +270,19 @@ def main(args):
         break
       if 'reset' == args.on_patience:
         print('Resetting the model to the average of the best models')
-        # and add some noise
-        averageModels(folder, model, noiseStd=0.01)
-        bestEpoch = epoch
-        continue
+        bestEpoch = epoch # reset the best epoch
+        for _ in range(args.restarts):
+          # and add some noise
+          averageModels(folder, model, noiseStd=args.noise)
+          # re-evaluate the model with the new weights
+          testLoss = eval(onlyImproved=True)
+          if testLoss < bestLoss:
+            print('Improved %.5f => %.5f' % (bestLoss, testLoss))
+            bestLoss = testLoss
+            bestEpoch = epoch
+            model.save(folder, postfix='best')
+            continue
+          continue
     continue
   return
 
@@ -299,6 +310,11 @@ if __name__ == '__main__':
     help='JSON file with the scheduler parameters for sampling the training dataset'
   )
   parser.add_argument('--debug', action='store_true')
+  parser.add_argument('--noise', type=float, default=1e-4)
+  parser.add_argument(
+    '--restarts', type=int, default=1,
+    help='Number of times to restart the model reinitializing the weights'
+  )
 
   main(parser.parse_args())
   pass

@@ -27,9 +27,11 @@ class CDecodeSeries(tf.keras.layers.Layer):
     coefs = tf.pow(self._base, powers)
     return tf.reduce_sum(x * coefs, axis=-1)
 ############################################
+SMLP_GLOBAL_DROPOUT = 0.01
 class sMLP(tf.keras.layers.Layer):
-  def __init__(self, sizes, activation='linear', dropout=0.01, **kwargs):
+  def __init__(self, sizes, activation='linear', dropout=None, **kwargs):
     super().__init__(**kwargs)
+    dropout = SMLP_GLOBAL_DROPOUT if dropout is None else dropout
     layers = []
     for i, sz in enumerate(sizes):
       if 0.0 < dropout:

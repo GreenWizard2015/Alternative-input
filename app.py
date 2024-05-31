@@ -342,9 +342,9 @@ def _modelFromArgs(args):
     stats = json.load(f)
 
   # My own ids hardcoded here for simplicity
-  userId = '98fdb9d9-14ef-9276-31e6-836e830acc19'
-  placeId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
-  screenId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed/29f35417-7bb7-3c94-124c-2ae16bda235d'
+  userId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
+  placeId = '29ecaa6a-d3b5-784b-887e-f50a0c6533fa'
+  screenId = placeId + '/' + '29f35417-7bb7-3c94-124c-2ae16bda235d'
   return CModelWrapper(
     timesteps=args.steps,  
     user=dict(
@@ -353,7 +353,7 @@ def _modelFromArgs(args):
       screenId=screenId,
     ),
     stats=stats,
-    weights=dict(folder=args.folder, postfix=args.model)
+    weights=dict(folder=args.folder, postfix=args.model, embeddings=True)
   )
 
 def _predictorFromArgs(args):
