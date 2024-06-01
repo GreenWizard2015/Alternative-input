@@ -6,7 +6,7 @@ from Core.CModelWrapper import CModelWrapper
 class CModelTrainer(CModelWrapper):
   def __init__(self, timesteps, model='simple', **kwargs):
     super().__init__(timesteps, model=model, **kwargs)
-    self._compile()
+    self.compile()
     # add signatures to help tensorflow optimize the graph
     specification = self._modelRaw['inputs specification']
     self._trainStep = tf.function(
@@ -27,7 +27,7 @@ class CModelTrainer(CModelWrapper):
     )
     return
   
-  def _compile(self):
+  def compile(self):
     self._model.compile(optimizer=NNU.createOptimizer())
     return
   

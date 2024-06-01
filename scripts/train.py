@@ -77,11 +77,12 @@ def evaluator(datasets, model, folder, args):
     totalLoss = totalDist = 0.0
     for i, dataset in enumerate(datasets):
       loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
-      if not onlyImproved:
+      isImproved = loss < losses[i]
+      if (not onlyImproved) or isImproved:
         print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f' % (
           i + 1, len(datasets), T, loss, losses[i], dist
         ))
-      if loss < losses[i]:
+      if isImproved:
         print('Test %d / %d | Improved %.5f => %.5f' % (i + 1, len(datasets), losses[i], loss))
         model.save(folder, postfix='best-%d' % i) # save the model separately
         losses[i] = loss
@@ -197,6 +198,7 @@ def averageModels(folder, model, noiseStd=0.0):
   # average the weights
   TV = [(x / N) + np.random.normal(0.0, noiseStd, x.shape) for x in TV]
   model._model.set_weights(TV)
+  model.compile() # recompile the model with the new weights
   return
 
 def main(args):
