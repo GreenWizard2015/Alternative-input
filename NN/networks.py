@@ -56,7 +56,7 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
   # we need to combine them together and with the encodedP
   combined = encodedP # start with the face features
   for i, EFeat in enumerate(encodedEFList):
-    combined = CResidualMultiplicativeLayer(name='F2S/ResMul-%d' % i)([
+    combined = CFusingBlock(name='F2S/ResMul-%d' % i)([
       combined,
       sMLP(sizes=[latentSize] * 1, activation='relu', name='F2S/MLP-%d' % i)(
         L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
@@ -94,7 +94,7 @@ def Step2LatentModel(latentSize, embeddingsSize):
   temporal = sMLP(sizes=[latentSize] * 1, activation='relu')(
     L.Concatenate(-1)([stepsData, encodedT, embeddings])
   )
-  temporal = CResidualMultiplicativeLayer()([stepsData, temporal])
+  temporal = CFusingBlock()([stepsData, temporal])
   intermediate['S2L/enc0'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   for blockId in range(3):
@@ -104,14 +104,14 @@ def Step2LatentModel(latentSize, embeddingsSize):
     temp = sMLP(sizes=[latentSize] * 1, activation='relu')(
       L.Concatenate(-1)([temporal, temp])
     )
-    temporal = CResidualMultiplicativeLayer()([temporal, temp])
+    temporal = CFusingBlock()([temporal, temp])
     intermediate['S2L/ResLSTM-%d' % blockId] = temporal
     continue
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   latent = sMLP(sizes=[latentSize] * 1, activation='relu')(
     L.Concatenate(-1)([stepsData, temporal, encodedT, encodedT])
   )
-  latent = CResidualMultiplicativeLayer()([stepsData, latent])
+  latent = CFusingBlock()([stepsData, latent])
   return tf.keras.Model(
     inputs={
       'latent': latents,
@@ -185,6 +185,35 @@ def Face2LatentModel(
   IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   res['intermediate'] = {k: IP(x) for k, x in intermediate.items()}
   res['result'] = IP(res['latent'])
+  ###################################
+  # TODO: figure out is this helpful or not
+  # branch for global coordinates transformation
+  # predict shift, rotation, scale
+  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
+  emb = sMLP(sizes=[64, 64, 64, 64, 32], activation='relu')(emb[:, 0])
+  shift = L.Dense(2, name='GlobalShift')(emb)[:, None]
+  rotation = L.Dense(1, name='GlobalRotation', activation='sigmoid')(emb)[:, None] * np.pi
+  scale = L.Dense(2, name='GlobalScale')(emb)[:, None]
+
+  shifted = res['result'] + shift - 0.5 # [0.5, 0.5] -> [0, 0]
+  # Rotation matrix components
+  cos_rotation = L.Lambda(lambda x: tf.cos(x))(rotation)
+  sin_rotation = L.Lambda(lambda x: tf.sin(x))(rotation)
+  rotation_matrix = L.Lambda(lambda x: tf.stack([x[0], x[1]], axis=-1))([cos_rotation, sin_rotation])
+
+  # Apply rotation
+  rotated = L.Lambda(
+    lambda x: tf.einsum('isj,iomj->isj', x[0], x[1])
+  )([shifted, rotation_matrix]) + 0.5 # [0, 0] -> [0.5, 0.5] back
+
+  # Apply scale
+  scaled = rotated * scale
+  def clipWithGradient(x):
+    res = tf.clip_by_value(x, 0.0, 1.0)
+    return x + tf.stop_gradient(res - x)
+  
+  res['result'] = L.Lambda(clipWithGradient)(scaled)
+  ###################################
 
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
@@ -195,13 +224,6 @@ def Face2LatentModel(
   }
   
 if __name__ == '__main__':
-  # autoencoder = FaceAutoencoderModel(latentSize=64, means={
-  #   'points': np.zeros((478, 2), np.float32),
-  #   'left eye': np.zeros((32, 32), np.float32),
-  #   'right eye': np.zeros((32, 32), np.float32),
-  # })['main']
-  # autoencoder.summary(expand_nested=True)
-
   X = Face2LatentModel(steps=5, latentSize=64,
     embeddings={
       'userId': 1, 'placeId': 1, 'screenId': 1, 'size': 64

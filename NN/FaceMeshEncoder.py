@@ -1,5 +1,5 @@
 import tensorflow as tf
-from NN.Utils import sMLP, CRMLBlock
+from NN.Utils import sMLP, CFusingBlock
 from NN.CCoordsEncodingLayer import CCoordsEncodingLayer
 from Core.Utils import FACE_MESH_INVALID_VALUE
 
@@ -15,7 +15,7 @@ class FaceMeshEncoder(tf.keras.Model):
     self._sMLP2 = sMLP(sizes=[latentSize], activation='relu', name='FaceMeshEncoder/sMLP-2')
 
     self._RML = [
-      CRMLBlock(
+      CFusingBlock(
         mlp=sMLP(
           sizes=[latentSize * 2] * 3,
           activation='relu', name=f'FaceMeshEncoder/RML-{i}/mlp'

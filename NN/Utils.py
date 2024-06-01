@@ -227,72 +227,17 @@ class CQuantizeLayer(tf.keras.layers.Layer):
     quantized = 0.5 + tf.clip_by_value(quantized, self._minValue, self._maxValue)
     return x + tf.stop_gradient(quantized - x)
 ####################################
-class CResidualMultiplicativeLayer(tf.keras.layers.Layer):
-  def __init__(self, eps=1e-8, headsN=1, **kwargs):
-    super().__init__(**kwargs)
-    self._eps = eps
-    self._scale = tf.Variable(
-      initial_value=tf.random.normal((1, ), mean=0.0, stddev=0.1),
-      trainable=True, dtype=tf.float32,
-      name=self.name + '/_scale'
-    )
-    self._headsN = headsN
-    self._normalization = None
-    return
-  
-  @property
-  def scale(self): return tf.nn.sigmoid(self._scale) * (1.0 - 2.0 * self._eps) + self._eps # [eps, 1 - eps]
-  
-  def _SMNormalization(self, xhat):
-    xhat = tf.nn.softmax(xhat, axis=-1)
-    xhat = xhat - tf.reduce_mean(xhat, axis=-1, keepdims=True)
-    rng = tf.reduce_max(tf.abs(xhat), axis=-1, keepdims=True)
-    return 1.0 + tf.math.divide_no_nan(xhat, rng * self.scale) # [1 - scale, 1 + scale]
-  
-  def _HeadwiseNormalizationNoPadding(self, xhat):
-    shape = tf.shape(xhat)
-    # reshape [B, ..., N * headsN] -> [B, ..., headsN, N], apply normalization, reshape back
-    xhat = tf.reshape(xhat, tf.concat([shape[:-1], [self._headsN, shape[-1] // self._headsN]], axis=-1))
-    xhat = self._SMNormalization(xhat)
-    xhat = tf.reshape(xhat, shape)
-    return xhat
-  
-  def _HeadwiseNormalizationPadded(self, lastChunk):  
-    def F(xhat):
-      mainPart = self._HeadwiseNormalizationNoPadding(xhat[..., :-lastChunk])
-      tailPart = self._SMNormalization(xhat[..., -lastChunk:])
-      return tf.concat([mainPart, tailPart], axis=-1)
-    return F
-  
-  def build(self, input_shapes):
-    _, xhatShape = input_shapes
-    self._normalization = self._SMNormalization
-    if 1 < self._headsN:
-      assert 1 < (xhatShape[-1] // self._headsN), "too few channels for headsN"
-
-      lastChunk = xhatShape[-1] % self._headsN
-      self._normalization = self._HeadwiseNormalizationPadded(lastChunk) if 0 < lastChunk else self._HeadwiseNormalizationNoPadding
-      pass
-    return super().build(input_shapes)
-  
-  def call(self, x):
-    x, xhat = x
-    # return (tf.nn.relu(x) + self._eps) * (self._normalization(xhat) + self._eps) # more general/stable version
-    # with SM normalization, relu and addition are redundant
-    return x * self._normalization(xhat)
-####################################
-class CRMLBlock(tf.keras.Model):
-  def __init__(self, mlp=None, RML=None, **kwargs):
+class CFusingBlock(tf.keras.Model):
+  def __init__(self, mlp=None, **kwargs):
     super().__init__(**kwargs)
     if mlp is None: mlp = lambda x: x
     self._mlp = mlp
-    if RML is None: RML = CResidualMultiplicativeLayer()
-    self._RML = RML
     return
   
   def build(self, input_shapes):
     xShape = input_shapes[0]
     self._lastDense = L.Dense(xShape[-1], activation='relu', name='%s/LastDense' % self.name)
+    self._combiner = L.Dense(xShape[-1], activation='relu', name='%s/Combiner' % self.name)
     return super().build(input_shapes)
   
   def call(self, x):
@@ -301,7 +246,8 @@ class CRMLBlock(tf.keras.Model):
     xhat = self._mlp(xhat)
     xhat = self._lastDense(xhat)
     x0 = x[0]
-    return self._RML([x0, xhat])
+    x = tf.concat([x0, xhat], axis=-1)
+    return self._combiner(x)
 ####################################
 # Hacky way to provide same optimizer for all models
 def createOptimizer(config=None):
