@@ -293,6 +293,7 @@ def main(args):
         break
       if 'reset' == args.on_patience:
         print('Resetting the model to the average of the best models')
+        bestEpoch = epoch # reset the patience
         performRandomSearch(epoch=epoch)
     continue
   return
