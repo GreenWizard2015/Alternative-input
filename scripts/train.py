@@ -239,16 +239,44 @@ def main(args):
   model = trainer(**model)
   model._model.summary()
 
-  if args.average:
-    averageModels(folder, model)
   # find folders with the name "/test-*/"
   evalDatasets = [
     CTestLoader(nm)
     for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
   ]
   eval = evaluator(evalDatasets, model, folder, args)
-  bestLoss = eval()
+  bestLoss = eval() # evaluate loaded model
   bestEpoch = 0
+  # wrapper for the evaluation function. It saves the model if it is better
+  def evalWrapper(eval):
+    def f(epoch, onlyImproved=False):
+      nonlocal bestLoss, bestEpoch
+      newLoss = eval(onlyImproved=onlyImproved)
+      if newLoss < bestLoss:
+        print('Improved %.5f => %.5f' % (bestLoss, newLoss))
+        bestLoss = newLoss
+        bestEpoch = epoch
+        model.save(folder, postfix='best')
+      return
+    return f
+  
+  eval = evalWrapper(eval)
+
+  def performRandomSearch(epoch=0):
+    nonlocal bestLoss, bestEpoch
+    averageModels(folder, model, noiseStd=0.0)
+    eval(epoch=epoch, onlyImproved=True) # evaluate the averaged model
+    for _ in range(args.restarts):
+      # and add some noise
+      averageModels(folder, model, noiseStd=args.noise)
+      # re-evaluate the model with the new weights
+      eval(epoch=epoch, onlyImproved=True)
+      continue
+    return
+  
+  if args.average:
+    performRandomSearch()
+
   trainStep = _modelTrainingLoop(model, trainDataset)
   for epoch in range(args.epochs):
     trainStep(
@@ -256,14 +284,7 @@ def main(args):
       sampleParams=getSampleParams(epoch)
     )
     model.save(folder, postfix='latest')
-    
-    testLoss = eval()
-    if testLoss < bestLoss:
-      print('Improved %.5f => %.5f' % (bestLoss, testLoss))
-      bestLoss = testLoss
-      bestEpoch = epoch
-      model.save(folder, postfix='best')
-      continue
+    eval(epoch)
 
     print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
     if args.patience <= (epoch - bestEpoch):
@@ -272,19 +293,7 @@ def main(args):
         break
       if 'reset' == args.on_patience:
         print('Resetting the model to the average of the best models')
-        bestEpoch = epoch # reset the best epoch
-        for _ in range(args.restarts):
-          # and add some noise
-          averageModels(folder, model, noiseStd=args.noise)
-          # re-evaluate the model with the new weights
-          testLoss = eval(onlyImproved=True)
-          if testLoss < bestLoss:
-            print('Improved %.5f => %.5f' % (bestLoss, testLoss))
-            bestLoss = testLoss
-            bestEpoch = epoch
-            model.save(folder, postfix='best')
-            continue
-          continue
+        performRandomSearch(epoch=epoch)
     continue
   return
 

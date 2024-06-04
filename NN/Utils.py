@@ -232,6 +232,7 @@ class CFusingBlock(tf.keras.Model):
     super().__init__(**kwargs)
     if mlp is None: mlp = lambda x: x
     self._mlp = mlp
+    self._norm = L.LayerNormalization()
     return
   
   def build(self, input_shapes):
@@ -243,6 +244,7 @@ class CFusingBlock(tf.keras.Model):
   def call(self, x):
     assert isinstance(x, list), "expected list of inputs"
     xhat = tf.concat(x, axis=-1)
+    xhat = self._norm(xhat)
     xhat = self._mlp(xhat)
     xhat = self._lastDense(xhat)
     x0 = x[0]

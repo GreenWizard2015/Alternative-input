@@ -185,36 +185,7 @@ def Face2LatentModel(
   IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
   res['intermediate'] = {k: IP(x) for k, x in intermediate.items()}
   res['result'] = IP(res['latent'])
-  ###################################
-  # TODO: figure out is this helpful or not
-  # branch for global coordinates transformation
-  # predict shift, rotation, scale
-  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
-  emb = sMLP(sizes=[64, 64, 64, 64, 32], activation='relu')(emb[:, 0])
-  shift = L.Dense(2, name='GlobalShift')(emb)[:, None]
-  rotation = L.Dense(1, name='GlobalRotation', activation='sigmoid')(emb)[:, None] * np.pi
-  scale = L.Dense(2, name='GlobalScale')(emb)[:, None]
-
-  shifted = res['result'] + shift - 0.5 # [0.5, 0.5] -> [0, 0]
-  # Rotation matrix components
-  cos_rotation = L.Lambda(lambda x: tf.cos(x))(rotation)
-  sin_rotation = L.Lambda(lambda x: tf.sin(x))(rotation)
-  rotation_matrix = L.Lambda(lambda x: tf.stack([x[0], x[1]], axis=-1))([cos_rotation, sin_rotation])
-
-  # Apply rotation
-  rotated = L.Lambda(
-    lambda x: tf.einsum('isj,iomj->isj', x[0], x[1])
-  )([shifted, rotation_matrix]) + 0.5 # [0, 0] -> [0.5, 0.5] back
-
-  # Apply scale
-  scaled = rotated * scale
-  def clipWithGradient(x):
-    res = tf.clip_by_value(x, 0.0, 1.0)
-    return x + tf.stop_gradient(res - x)
   
-  res['result'] = L.Lambda(clipWithGradient)(scaled)
-  ###################################
-
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
     'main': main,
