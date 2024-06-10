@@ -87,12 +87,10 @@ class CModelWrapper:
     self._model.load_weights(path)
     if embeddings:
       embeddings = np.load(path.replace('.h5', '-embeddings.npz'))
-      for nm in self._embeddings.keys(): # recreate embeddings
+      for nm, emb in self._embeddings.items():
         w = embeddings[nm]
-        emb = L.Embedding(w.shape[0], w.shape[1])
-        emb.build((None, 1))
-        emb.set_weights([w])
-        self._embeddings[nm] = emb # replace
+        if not emb.built: emb.build((None, w.shape[0]))
+        emb.set_weights([w]) # replace embeddings
         continue
     return
   
