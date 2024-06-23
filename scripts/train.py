@@ -225,8 +225,8 @@ def main(args):
         timesteps=timesteps,
         stepsSampling='uniform',
         # no augmentations by default
-        pointsNoise=0.02, pointsDropout=0.1,
-        eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=5.0, lightBlobFactor=5.0,
+        pointsNoise=0.01, pointsDropout=0.0,
+        eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
       ),
     )
   )
