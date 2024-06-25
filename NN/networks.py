@@ -25,6 +25,7 @@ class IntermediatePredictor(tf.keras.layers.Layer):
       sizes=[128, 64, 32], activation='relu',
       name='%s/MLP' % self.name
     )
+    self._mlp.build(input_shape)
     self._decodePoints = L.Dense(2, name='%s/DecodePoints' % self.name)
     return super().build(input_shape)
   
@@ -168,8 +169,6 @@ def Face2LatentModel(
     **stepsData['intermediate'],
     **res['intermediate'],
   }
-  # drop all intermediate outputs
-  res['intermediate'] = {}
 
   inputs = {
     'points': points,
@@ -181,13 +180,10 @@ def Face2LatentModel(
     'screenId': screenIdEmb,
   }
 
-  intermediate = res['intermediate']
-  IP = lambda x: IntermediatePredictor()(x) # own IntermediatePredictor for each output
-  res['intermediate'] = {k: IP(x) for k, x in intermediate.items()}
-  res['result'] = IP(res['latent'])
-  
+  res['result'] = IntermediatePredictor()(res['latent'])
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
+    'intermediate shapes': {k: v.shape for k, v in res['intermediate'].items()},
     'main': main,
     'Face2Step': Face2Step,
     'Step2Latent': Step2Latent,

@@ -28,7 +28,7 @@ class CModelTrainer(CModelWrapper):
     return
   
   def compile(self):
-    self._model.compile(optimizer=NNU.createOptimizer())
+    self._optimizer = NNU.createOptimizer()
     return
   
   def _pointLoss(self, ytrue, ypred):
@@ -46,22 +46,22 @@ class CModelTrainer(CModelWrapper):
     x, (y, ) = Data
     y = y[..., 0, :]
     losses = {}
-    parts = list(self._embeddings.values()) + [self._model]
-    TV = sum([p.trainable_variables for p in parts], [])
-    with tf.GradientTape(watch_accessed_variables=False) as tape:
-      tape.watch(TV)
+    with tf.GradientTape() as tape:
       data = x['augmented']
       data = self._replaceByEmbeddings(data)
       predictions = self._model(data, training=True)
-      predictions = dict(**predictions['intermediate'], final=predictions['result'])
-      for name, pts in predictions.items():
+      intermediate = predictions['intermediate']
+      losses['final'] = tf.reduce_mean(self._pointLoss(y, predictions['result']))
+      for name, encoder in self._intermediateEncoders.items():
+        latent = intermediate[name]
+        pts = encoder(latent, training=True)
         loss = self._pointLoss(y, pts)
         losses['loss-%s' % name] = tf.reduce_mean(loss)
         continue
       loss = sum(losses.values())
       losses['loss'] = loss
   
-    self._model.optimizer.minimize(loss, TV, tape=tape)
+    self._optimizer.minimize(loss, tape.watched_variables(), tape=tape)
     ###############
     return losses
 

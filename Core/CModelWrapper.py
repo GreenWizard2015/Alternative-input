@@ -5,7 +5,7 @@ import tensorflow as tf
 from tensorflow.keras import layers as L
 
 class CModelWrapper:
-  def __init__(self, timesteps, model='simple', user=None, stats=None, **kwargs):
+  def __init__(self, timesteps, model='simple', user=None, stats=None, use_encoders=True, **kwargs):
     if user is None:
       user = {
         'userId': 0,
@@ -37,6 +37,15 @@ class CModelWrapper:
       'placeId': L.Embedding(len(stats['placeId']), embeddings['size']),
       'screenId': L.Embedding(len(stats['screenId']), embeddings['size']),
     }
+    self._intermediateEncoders = {}
+    if use_encoders:
+      shapes = self._modelRaw['intermediate shapes']
+      for name, shape in shapes.items():
+        enc = networks.IntermediatePredictor(name='%s-encoder' % name)
+        enc.build(shape)
+        self._intermediateEncoders[name] = enc
+        continue
+   
     if 'weights' in kwargs:
       self.load(**kwargs['weights'])
     return
@@ -80,6 +89,15 @@ class CModelWrapper:
       embeddings[nm] = weights
       continue
     np.savez_compressed(path.replace('.h5', '-embeddings.npz'), **embeddings)
+    # save intermediate encoders
+    if self._intermediateEncoders:
+      encoders = {}
+      for nm, encoder in self._intermediateEncoders.items():
+        # save each variable separately
+        for ww in encoder.trainable_variables:
+          encoders['%s-%s' % (nm, ww.name)] = ww.numpy()
+        continue
+      np.savez_compressed(path.replace('.h5', '-intermediate-encoders.npz'), **encoders)
     return
     
   def load(self, folder=None, postfix='', embeddings=False):
@@ -92,6 +110,16 @@ class CModelWrapper:
         if not emb.built: emb.build((None, w.shape[0]))
         emb.set_weights([w]) # replace embeddings
         continue
+    
+    if self._intermediateEncoders:
+      encodersName = path.replace('.h5', '-intermediate-encoders.npz')
+      if os.path.isfile(encodersName):
+        encoders = np.load(encodersName)
+        for nm, encoder in self._intermediateEncoders.items():
+          for ww in encoder.trainable_variables:
+            w = encoders['%s-%s' % (nm, ww.name)]
+            ww.assign(w)
+          continue
     return
   
   def lock(self, isLocked):
@@ -102,3 +130,6 @@ class CModelWrapper:
   def timesteps(self):
     return self._timesteps
   
+  def trainable_variables(self):
+    parts = list(self._embeddings.values()) + [self._model] + list(self._intermediateEncoders.values())
+    return sum([p.trainable_variables for p in parts], [])

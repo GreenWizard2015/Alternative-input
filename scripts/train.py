@@ -182,22 +182,24 @@ def _trainer_from(args):
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def averageModels(folder, model, noiseStd=0.0):
-  TV = [np.zeros_like(x) for x in model._model.get_weights()]
+  TV = [np.zeros_like(x) for x in model.trainable_variables()]
   N = 0
   for nm in glob.glob(os.path.join(folder, '*.h5')):
     if not('best' in nm): continue # only the best models
     model.load(nm, embeddings=True)
     # add the weights to the total
-    weights = model._model.get_weights()
+    weights = model.trainable_variables()
     for i in range(len(TV)):
-      TV[i] += weights[i]
+      TV[i] += weights[i].numpy()
       continue
     N += 1
     continue
 
   # average the weights
   TV = [(x / N) + np.random.normal(0.0, noiseStd, x.shape) for x in TV]
-  model._model.set_weights(TV)
+  for v, new in zip(model.trainable_variables(), TV):
+    v.assign(new)
+    continue
   model.compile() # recompile the model with the new weights
   return
 
@@ -230,7 +232,7 @@ def main(args):
       ),
     )
   )
-  model = dict(timesteps=timesteps, stats=stats)
+  model = dict(timesteps=timesteps, stats=stats, use_encoders=args.with_enconders)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model, embeddings=args.embeddings)
   if args.modelId is not None:
@@ -326,6 +328,9 @@ if __name__ == '__main__':
   parser.add_argument(
     '--restarts', type=int, default=1,
     help='Number of times to restart the model reinitializing the weights'
+  )
+  parser.add_argument(
+    '--with-enconders', default=False, action='store_true',
   )
 
   main(parser.parse_args())

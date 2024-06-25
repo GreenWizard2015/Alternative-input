@@ -27,7 +27,7 @@ class CDecodeSeries(tf.keras.layers.Layer):
     coefs = tf.pow(self._base, powers)
     return tf.reduce_sum(x * coefs, axis=-1)
 ############################################
-SMLP_GLOBAL_DROPOUT = 0.01
+SMLP_GLOBAL_DROPOUT = 0.0
 class sMLP(tf.keras.layers.Layer):
   def __init__(self, sizes, activation='linear', dropout=None, **kwargs):
     super().__init__(**kwargs)
@@ -40,7 +40,11 @@ class sMLP(tf.keras.layers.Layer):
       continue
     self._F = tf.keras.Sequential(layers, name=self.name + '/F')
     return
-  
+ 
+  def build(self, input_shape):
+    self._F.build(input_shape)
+    return super().build(input_shape)
+   
   def call(self, x, **kwargs):
     return self._F(x, **kwargs)
 ############################################
