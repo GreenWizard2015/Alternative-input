@@ -153,6 +153,17 @@ def processFolder(
   if 0 < testPadding:
     testing = dropPadding(testing, testPadding)
 
+  # remove the npz files
+  files = os.listdir(folder)
+  for fn in files:
+    os.remove(os.path.join(folder, fn))
+  print('Removed', len(files), 'files')
+  
+  totalFrames = len(testing) + len(training)
+  if totalFrames < minFrames:
+    print('Not enough frames: %d < %d' % (totalFrames, minFrames))
+    return 0, 0
+  # save training and testing sets 
   def saveSubset(filename, idx):
     print('%s: %d frames' % (filename, len(idx)))
     subset = {k: v[idx] for k, v in dataset.items()}
@@ -162,17 +173,6 @@ def processFolder(
     np.savez(os.path.join(folder, filename), **subset)
     return
 
-  # remove the npz files
-  files = os.listdir(folder)
-  for fn in files:
-    os.remove(os.path.join(folder, fn))
-  print('Removed', len(files), 'files')
-  
-  totalFrames = len(testing) + len(training)
-  if minFrames < totalFrames:
-    print('Not enough frames: %d < %d' % (totalFrames, minFrames))
-    return 0, 0
-  # save training and testing sets 
   saveSubset('train.npz', training)
   saveSubset('test.npz', testing)
 
