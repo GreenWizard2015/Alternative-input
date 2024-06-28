@@ -73,21 +73,27 @@ def _eval(dataset, model, plotFilename, args):
 
 def evaluator(datasets, model, folder, args):
   losses = [np.inf] * len(datasets) # initialize with infinity
+  dists = [np.inf] * len(datasets) # initialize with infinity
   def evaluate(onlyImproved=False):
     totalLoss = totalDist = 0.0
+    losses_dist = []
     for i, dataset in enumerate(datasets):
       loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
+      losses_dist.append((loss, losses[i], dist, dists[i]))
       isImproved = loss < losses[i]
       if (not onlyImproved) or isImproved:
-        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f' % (
-          i + 1, len(datasets), T, loss, losses[i], dist
+        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f (%.5f)' % (
+          i + 1, len(datasets), T, loss, losses[i], dist, dists[i]
         ))
       if isImproved:
-        print('Test %d / %d | Improved %.5f => %.5f' % (i + 1, len(datasets), losses[i], loss))
+        print('Test %d / %d | Improved %.5f => %.5f, Distance: %.5f => %.5f' % (
+          i + 1, len(datasets), losses[i], loss, dists[i], dist
+        ))
         model.save(folder, postfix='best-%d' % i) # save the model separately
         losses[i] = loss
         pass
 
+      dists[i] = min(dist, dists[i]) # track the best distance
       totalLoss += loss
       totalDist += dist
       continue
@@ -95,7 +101,7 @@ def evaluator(datasets, model, folder, args):
       print('Mean loss: %.5f | Mean distance: %.5f' % (
         totalLoss / len(datasets), totalDist / len(datasets)
       ))
-    return totalLoss / len(datasets)
+    return totalLoss / len(datasets), losses_dist
   return evaluate
 
 def _modelTrainingLoop(model, dataset):
@@ -247,15 +253,20 @@ def main(args):
     for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
   ]
   eval = evaluator(evalDatasets, model, folder, args)
-  bestLoss = eval() # evaluate loaded model
+  bestLoss, _ = eval() # evaluate loaded model
   bestEpoch = 0
   # wrapper for the evaluation function. It saves the model if it is better
   def evalWrapper(eval):
     def f(epoch, onlyImproved=False):
       nonlocal bestLoss, bestEpoch
-      newLoss = eval(onlyImproved=onlyImproved)
+      newLoss, losses = eval(onlyImproved=onlyImproved)
       if newLoss < bestLoss:
         print('Improved %.5f => %.5f' % (bestLoss, newLoss))
+        if onlyImproved: #details
+          for i, (loss, bestLoss_, dist, bestDist) in enumerate(losses):
+            print('Test %d | Loss: %.5f (%.5f). Distance: %.5f (%.5f)' % (i + 1, loss, bestLoss_, dist, bestDist))
+            continue
+          print('-' * 80)
         bestLoss = newLoss
         bestEpoch = epoch
         model.save(folder, postfix='best')
