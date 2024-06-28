@@ -54,10 +54,10 @@ def main(args):
   with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
     stats = json.load(f)
     
-  badDatasets = [] # list of tuples (userId, placeId, screenId)
+  oldBadDatasets = [] # list of tuples (userId, placeId, screenId) strings
   if os.path.exists(os.path.join(folder, 'blacklist.json')):
     with open(os.path.join(folder, 'blacklist.json'), 'r') as f:
-      badDatasets = json.load(f)
+      oldBadDatasets = json.load(f)
     pass
 
   model = dict(timesteps=timesteps, stats=stats, use_encoders=False)
@@ -67,6 +67,7 @@ def main(args):
 
   model = CModelTrainer(**model)
   # find folders with the name "/test-*/"
+  badDatasets = []
   for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/')):
     evalDataset = CTestLoader(nm)
     loss, dist = evaluate(evalDataset, model)
@@ -81,6 +82,7 @@ def main(args):
     screenId = stats['screenId'][screenId]
     res.append((userId, placeId, screenId))
     continue
+  res = oldBadDatasets + res # add the old blacklisted datasets
   print('Blacklisted datasets:')
   print(json.dumps(res, indent=2))
   # save the blacklisted datasets
