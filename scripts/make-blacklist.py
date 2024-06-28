@@ -53,6 +53,12 @@ def main(args):
   stats = None
   with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
     stats = json.load(f)
+    
+  badDatasets = [] # list of tuples (userId, placeId, screenId)
+  if os.path.exists(os.path.join(folder, 'blacklist.json')):
+    with open(os.path.join(folder, 'blacklist.json'), 'r') as f:
+      badDatasets = json.load(f)
+    pass
 
   model = dict(timesteps=timesteps, stats=stats, use_encoders=False)
   assert args.model is not None, 'The model should be specified'
@@ -60,7 +66,6 @@ def main(args):
     model['weights'] = dict(folder=folder, postfix=args.model, embeddings=True)
 
   model = CModelTrainer(**model)
-  badDatasets = [] # list of tuples (userId, placeId, screenId) for the blacklisted datasets
   # find folders with the name "/test-*/"
   for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/')):
     evalDataset = CTestLoader(nm)
