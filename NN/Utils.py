@@ -27,9 +27,11 @@ class CDecodeSeries(tf.keras.layers.Layer):
     coefs = tf.pow(self._base, powers)
     return tf.reduce_sum(x * coefs, axis=-1)
 ############################################
+SMLP_GLOBAL_DROPOUT = 0.01
 class sMLP(tf.keras.layers.Layer):
-  def __init__(self, sizes, activation='linear', dropout=0.01, **kwargs):
+  def __init__(self, sizes, activation='linear', dropout=None, **kwargs):
     super().__init__(**kwargs)
+    dropout = SMLP_GLOBAL_DROPOUT if dropout is None else dropout
     layers = []
     for i, sz in enumerate(sizes):
       if 0.0 < dropout:
@@ -38,7 +40,11 @@ class sMLP(tf.keras.layers.Layer):
       continue
     self._F = tf.keras.Sequential(layers, name=self.name + '/F')
     return
-  
+ 
+  def build(self, input_shape):
+    self._F.build(input_shape)
+    return super().build(input_shape)
+   
   def call(self, x, **kwargs):
     return self._F(x, **kwargs)
 ############################################
@@ -105,25 +111,35 @@ class CDecodePoint(tf.keras.layers.Layer):
     x = tf.reshape(x, tf.concat([tf.shape(x)[:-1], [2, -1]], axis=-1))
     return self._decode(x)
 ############################################
+from .CCoordsEncodingLayer import CCoordsEncodingLayer
 class CConvPE(tf.keras.layers.Layer):
-  def __init__(self, channels=1, activation=None, **kwargs):
+  def __init__(self, channels=32, activation=None, **kwargs):
     super().__init__(**kwargs)
     self._channels = channels
+    self._coords2pe = CCoordsEncodingLayer(N=channels, sharedTransformation=True)
     self._activation = tf.keras.activations.get(activation)
     return
   
-  def build(self, s):
-    super().build(s)
-    self._PE = tf.Variable(
-      initial_value=tf.zeros((1, *s[1:-1], self._channels), dtype="float32"),
-      trainable=True, dtype="float32",
-      name=self.name + '/_PE'
-    )
-    return
+  def _makeGrid(self, H, W):
+    HRange = tf.linspace(-1.0, 1.0, H)
+    WRange = tf.linspace(-1.0, 1.0, W)
+    coords = tf.meshgrid(HRange, WRange, indexing='ij')
+    coords = tf.stack(coords, axis=-1)
+    coords = tf.reshape(coords, [1, H * W, 2])
+    return coords
+  
+  def _PEFor(self, H, W):
+    coords = self._makeGrid(H, W)
+    coords = self._coords2pe(coords)
+    coords = tf.reshape(coords, [1, H, W, coords.shape[-1]])
+    coords = self._activation(coords)
+    return coords
   
   def call(self, x):
-    B = tf.shape(x)[0]
-    pe = tf.repeat(self._activation(self._PE), B, axis=0)
+    B, H, W = tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2]
+    pe = self._PEFor(H, W)
+    pe = tf.repeat(pe, B, axis=0)
+    tf.assert_equal(tf.shape(pe)[:-1], tf.shape(x)[:-1])
     return tf.concat([x, pe], axis=-1)
 ####################################
 class CStackApplySplit(tf.keras.layers.Layer):
@@ -207,35 +223,57 @@ class CQuantizeLayer(tf.keras.layers.Layer):
   def call(self, x, training=None):
     quantized = x
     if training:
-      quantized = x + tf.random.truncated_normal(tf.shape(x), 0.0, 0.1)
+      d = 1e-4
+      quantized = x + tf.random.truncated_normal(tf.shape(x), -0.5 + d, 0.5 - d)
       pass
 
-    quantized = tf.round(quantized)
+    quantized = tf.floor(quantized)
     quantized = 0.5 + tf.clip_by_value(quantized, self._minValue, self._maxValue)
     return x + tf.stop_gradient(quantized - x)
 ####################################
-# causal self-attention transformer
-class CMyTransformerLayer(tf.keras.layers.Layer):
-  def __init__(self,
-    latentSize, num_heads=8,
-    toQuery=None, toKey=None,
-    useNormalization=False, 
-    **kwargs
-  ):
+class CFusingBlock(tf.keras.Model):
+  def __init__(self, mlp=None, **kwargs):
     super().__init__(**kwargs)
-    self._layerNorm = tf.keras.layers.LayerNormalization() if useNormalization else lambda x: x
-    self._mha = tf.keras.layers.MultiHeadAttention(
-      num_heads=num_heads, dropout=0.01, key_dim=latentSize
-    )
-    self._toQuery = toQuery if toQuery is not None else lambda x: x
-    self._toKey = toKey if toKey is not None else lambda x: x
+    if mlp is None: mlp = lambda x: x
+    self._mlp = mlp
+    self._norm = L.LayerNormalization()
     return
-
+  
+  def build(self, input_shapes):
+    xShape = input_shapes[0]
+    self._lastDense = L.Dense(xShape[-1], activation='relu', name='%s/LastDense' % self.name)
+    self._combiner = L.Dense(xShape[-1], activation='relu', name='%s/Combiner' % self.name)
+    return super().build(input_shapes)
+  
   def call(self, x):
-    attention = self._mha(
-      query=self._toQuery(x),
-      key=self._toKey(x),
-      value=x,
-      use_causal_mask=True
-    )
-    return self._layerNorm(x + attention)
+    assert isinstance(x, list), "expected list of inputs"
+    xhat = tf.concat(x, axis=-1)
+    xhat = self._norm(xhat)
+    xhat = self._mlp(xhat)
+    xhat = self._lastDense(xhat)
+    x0 = x[0]
+    x = tf.concat([x0, xhat], axis=-1)
+    return self._combiner(x)
+####################################
+# Hacky way to provide same optimizer for all models
+def createOptimizer(config=None):
+  if config is None:
+    config = {
+      'learning_rate': 1e-4,
+      'weight_decay': 1e-1,
+      'exclude_from_weight_decay': [
+        'batch_normalization', 'bias',
+        'CEL_', # exclude CCoordsEncodingLayer from weight decay
+        '_gate', '_PE', '_scale', # exclude some custom layers variables
+      ],
+    }
+    pass
+
+  optimizer = tf.optimizers.AdamW(
+    learning_rate=config['learning_rate'],
+    weight_decay=config['weight_decay'],
+  )
+  var_names = config.get('exclude_from_weight_decay', None)
+  if var_names is not None:
+    optimizer.exclude_from_weight_decay(var_names=var_names)
+  return optimizer

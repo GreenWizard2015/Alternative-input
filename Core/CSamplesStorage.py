@@ -56,13 +56,13 @@ class CSamplesStorageChunk:
     return
 
 class CSamplesStorage:
-  def __init__(self, contextsDuration=[60 * 60, 60, 1]):
+  def __init__(self, userId, placeId, screenId):
     self._head = None
     self._latestT = -np.inf
-
-    self._contextsDuration = contextsDuration
-    self._contextsId = [-1] * len(contextsDuration)
-    self._contextsT = [-np.inf] * len(contextsDuration)
+    # they are the same for all samples, so we store them here to reduce the memory usage
+    self._userId = userId
+    self._placeId = placeId
+    self._screenId = screenId
     return
 
   def __len__(self):
@@ -72,43 +72,25 @@ class CSamplesStorage:
 
   @lru_cache(10000)
   def __getitem__(self, idx):
-    return self._head.get(idx)
+    res = self._head.get(idx)
+    # add userId, placeId, screenId
+    res['userId'] = self._userId
+    res['placeId'] = self._placeId
+    res['screenId'] = self._screenId
+    return res
   
-  def _contextFor(self, sample):
-    T = sample['time']
-    assert self._latestT < T
-
-    zipped = zip(self._contextsDuration, self._contextsId)
-    for i, (contextDuration, contextId) in enumerate(zipped):
-      if self._latestT + contextDuration < T:
-        self._contextsId[i] = contextId + 1
-        self._contextsT[i] = T
-      continue
-    self._latestT = T
-    return np.array(self._contextsId, dtype=np.int32)
-
   def add(self, sample):
     if not self._head:
       self._head = CSamplesStorageChunk()
     T = sample['time']
-    
-    # copy the sample and add the ContextID field
-    sample = {k: v for k, v in sample.items()}
-    sample['ContextID'] = self._contextFor(sample)
     
     self._latestT = T
     return self._head.add(sample)
   
   def addBlock(self, samples):
     assert all(isinstance(v, np.ndarray) for v in samples.values())
+    samples = {k: v for k, v in samples.items()} # copy the dictionary
     N = len(samples['time'])
-    # copy the sample and add the ContextID field
-    samples = {k: v for k, v in samples.items()}
-    contextId = [
-      self._contextFor({k: v[i] for k, v in samples.items()}) 
-      for i in range(N)
-    ]
-    samples['ContextID'] = np.array(contextId, dtype=np.int32)
 
     startIndex = len(self)
     block = CSamplesStorageChunk(samples=samples)
@@ -117,10 +99,6 @@ class CSamplesStorage:
     else:
       self._head.append(block)
     return np.arange(startIndex, startIndex + N)
-  
-  @property
-  def contexts(self):
-    return [1 + x for x in self._contextsId]
 
 if __name__ == '__main__':
   import os, Core.Utils as Utils
@@ -131,13 +109,5 @@ if __name__ == '__main__':
   print(len(ds))
   s = ds[0]
   print(list(s.keys()))
-  ContextID = set()
-  for i in range(len(ds)):
-    s = ds[i]
-    ContextID.add(tuple(s['ContextID']))
-  # sorted(ContextID)
-  print(sorted(ContextID))
-  print(len(ContextID))
-  print(ds.contexts)
 
   pass

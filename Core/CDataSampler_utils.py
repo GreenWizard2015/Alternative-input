@@ -1,3 +1,5 @@
+from Core.Utils import FACE_MESH_INVALID_VALUE
+
 import numpy as np
 def gaussian(x, mu, sig):
   return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
@@ -53,12 +55,16 @@ def addLightBlob(imgA, imgB, brightness, shared):
       tf.TensorSpec(shape=(None, 1), dtype=tf.float32),
     ),
     tf.TensorSpec(shape=(7,), dtype=tf.float32),
+    # userId, placeId, screenId
+    tf.TensorSpec(shape=(), dtype=tf.int32),
+    tf.TensorSpec(shape=(), dtype=tf.int32),
+    tf.TensorSpec(shape=(), dtype=tf.int32),
   ]
 )
-def toTensor(data, params):
+def toTensor(data, params, userId, placeId, screenId):
   print('Instantiate CDataSampler_utils.toTensor')
   (
-    pointsDropout, pointsNoise, 
+    pointsNoise, pointsDropout,
     eyesAdditiveNoise, eyesDropout,
     brightnessFactor, lightBlobFactor,
     timesteps
@@ -68,17 +74,54 @@ def toTensor(data, params):
   N = tf.shape(points)[0]
   imgA = tf.cast(imgA, tf.float32) / 255.
   imgB = tf.cast(imgB, tf.float32) / 255.
+  tf.assert_equal(tf.shape(imgA), (N, 48, 48))
+  tf.assert_equal(tf.shape(imgA), tf.shape(imgB))
+  userId = tf.fill((N, 1), userId)
+  placeId = tf.fill((N, 1), placeId)
+  screenId = tf.fill((N, 1), screenId)
   
   reshape = lambda x: tf.reshape(
     x,
     tf.concat([(N // timesteps, timesteps), tf.shape(x)[1:]], axis=-1)
   )
+  # apply center crop
+  fraction = 32.0 / 48.0
+  pos = tf.constant(
+    [[0.5 - fraction / 2, 0.5 - fraction / 2, 0.5 + fraction / 2, 0.5 + fraction / 2]],
+    dtype=tf.float32
+  )
+  pos = tf.tile(pos, [N, 1])
+  withCrop = lambda x: tf.image.crop_and_resize(
+    x[..., None],
+    boxes=pos,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
+
   clean = {
     'time': reshape(T),
     'points': reshape(points),
-    'left eye': reshape(imgA),
-    'right eye': reshape(imgB),
+    'left eye': reshape(withCrop(imgA)),
+    'right eye': reshape(withCrop(imgB)),
+    'userId': reshape(userId),
+    'placeId': reshape(placeId),
+    'screenId': reshape(screenId),
   }
+  ##########################
+  # random crop 32x32 eyes
+  fraction = 32.0 / 48.0
+  pos = tf.random.uniform((N, 2), minval=0.0, maxval=1.0 - fraction)
+  boxes = tf.concat([pos, pos + fraction], axis=-1)
+  tf.assert_equal(tf.shape(boxes), (N, 4))
+  imgA = tf.image.crop_and_resize(
+    imgA[..., None],
+    boxes=boxes,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
+  imgB = tf.image.crop_and_resize(
+    imgB[..., None],
+    boxes=boxes,
+    box_indices=tf.range(N), crop_size=(32, 32),
+  )[..., 0]
   ##########################
   def clip(x): return tf.clip_by_value(x, 0., 1.)
 
@@ -113,15 +156,16 @@ def toTensor(data, params):
     imgA = tf.where(tf.logical_and(mask, maskA)[:, None, None], 0.0, imgA)
     imgB = tf.where(tf.logical_and(mask, maskB)[:, None, None], 0.0, imgB)
   ##########################
-  validPointsMask = tf.reduce_all(-1.0 < points, axis=-1, keepdims=True)
-  if 0.0 < pointsDropout:
-    mask = tf.random.uniform(tf.shape(points)[:-1])[..., None] < pointsDropout
-    points = tf.where(mask, -1.0, points)
-  
+  validPointsMask = tf.reduce_all(FACE_MESH_INVALID_VALUE != points, axis=-1, keepdims=True)
   if 0.0 < pointsNoise:
     points += tf.random.normal(tf.shape(points), stddev=pointsNoise)
 
-  points = tf.where(validPointsMask, points, -1.0)
+  # dropouts
+  if 0.0 < pointsDropout:
+    mask = tf.random.uniform((N, tf.shape(points)[1])) < pointsDropout
+    points = tf.where(mask[:, :, None], FACE_MESH_INVALID_VALUE, points)
+
+  points = tf.where(validPointsMask, points, FACE_MESH_INVALID_VALUE)
   ##########################
   return {
     'augmented': {
@@ -129,6 +173,9 @@ def toTensor(data, params):
       'points': reshape(points),
       'left eye': reshape(imgA),
       'right eye': reshape(imgB),
+      'userId': reshape(userId),
+      'placeId': reshape(placeId),
+      'screenId': reshape(screenId),
     },
     'clean': clean,
   }

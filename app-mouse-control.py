@@ -1,18 +1,32 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-.
+'''
+  Very simple app to control the mouse with the eyes and mouth (only for Windows)
+  Mainly for testing purposes, because it is highly resource intensive (CPU/GPU go brrrrr, dah).
+
+  Before running this app, you need to train a model.
+  Also, you need to run "pip install pywin32 pywinauto keyboard" to install the dependencies.
+  After that, you have to perform the steps described at https://github.com/mhammond/pywin32#installing-globally
+  Sadly, but running this particular script is very tricky due to the fact that it uses pywinauto/pywin32.
+'''
 import numpy as np
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CLearnablePredictor import CLearnablePredictor
+from Core.CModelWrapper import CModelWrapper
 import os
 import time
+import keyboard
+import argparse
+import threading
+import pywintypes # should be imported before win32api due to a bug in pywin32
 import pywinauto
 from pywinauto import win32functions, win32defines
-import keyboard
-from Core.CDemoModel import CDemoModel
 
 class App:
-  def __init__(self, tracker, predictor):
-    self._running = True
+  def __init__(self, tracker, predictor, smoothingFactor, fps, lipsMinDistance):
+    self._smoothingFactor = smoothingFactor
+    self._fps = fps
+    self._lipsMinDistance = lipsMinDistance
     
     self._lastPrediction = None
     self._smoothedPrediction = (0, 0)
@@ -21,32 +35,34 @@ class App:
 
     self._mouthOpen = False
     self._mouthWasOpen = False
+
+    self._done = threading.Event()
     return
 
   def on_keypress(self, event):
     if 'esc' == event.name:
-      self._running = False
+      self._done.set()
     return
   
   def on_tick(self):
     lastTracked = None
     tracked = self._tracker.track()
     if not(tracked is None):
-      self._mouthOpen = 50 <= tracked['lips distance']
+      self._mouthOpen = self._lipsMinDistance <= tracked['lips distance']
       T = time.time()
       lastTracked = {
         'tracked': {**tracked, 'time': T},
         'time': T,
         'pos': np.array(self._smoothedPrediction, np.float32)
       }
+      prediction = self._predictor(lastTracked['tracked'])
+      if not(prediction is None):
+        self._lastPrediction = prediction
       pass
     #####################
-    prediction = self._predictor(lastTracked)
-    if not(prediction is None):
-      self._lastPrediction = prediction
     
     if self._lastPrediction:
-      factor = 0.97
+      factor = self._smoothingFactor
       pred = self._lastPrediction[0]
       predPos = pred['coords']
       self._smoothedPrediction = np.clip(
@@ -77,25 +93,34 @@ class App:
         win32functions.GetSystemMetrics(win32defines.SM_CXSCREEN),
         win32functions.GetSystemMetrics(win32defines.SM_CYSCREEN)
       ])
-      while self._running:
+      while not self._done.wait(1.0 / self._fps):
         self.on_tick()
-        time.sleep(0.01)
         continue
     finally:
       keyboard.unhook_all()
     return
     
-def main():
+def main(args):
   folder = os.path.dirname(__file__)
   folder = os.path.join(folder, 'Data')
-  model = CDemoModel(timesteps=5, weights=dict(folder=folder, postfix='latest'), trainable=False)
+  model = CModelWrapper(timesteps=5, weights=dict(folder=folder, postfix=args.model))
    
-  with CThreadedEyeTracker() as tracker:
-    with CLearnablePredictor(dataset=None, model=model) as predictor:
-      app = App(tracker, predictor=predictor.async_infer)
+  with CThreadedEyeTracker(fps=args.fps) as tracker:
+    with CLearnablePredictor(model=model, fps=args.fps) as predictor:
+      app = App(
+        tracker, predictor=predictor.async_infer, 
+        smoothingFactor=args.smoothing,
+        fps=args.fps,
+        lipsMinDistance=args.lips_distance
+      )
       app.run()
   return
 
 if __name__ == '__main__':
-  main()
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--smoothing', type=float, default=0.95)
+  parser.add_argument('--fps', type=int, default=10)
+  parser.add_argument('--lips-distance', type=float, default=50)
+  parser.add_argument('--model', type=str, default='best')
+  main(parser.parse_args())
  

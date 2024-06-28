@@ -5,6 +5,7 @@ import math
 class CCoordsEncodingLayer(tf.keras.layers.Layer):
   def __init__(self, 
     N, raw=True, useShifts=False,
+    hiddenN=1.0,
     scaling='pow', # 'pow' or 'linear'
     maxFrequency=1e+4,
     useLowBands=True, useHighBands=True,
@@ -13,6 +14,9 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     **kwargs
   ):
     super().__init__(**kwargs)
+    self._bottleneck = tf.keras.layers.Dense(N, use_bias=False, activation=None, name=self.name + '/_bottleneck')
+
+    N = int(N * hiddenN)
     self._N = N
     self._raw = raw
     self._sharedTransformation = sharedTransformation
@@ -21,13 +25,13 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       self._shifts = tf.Variable(
         initial_value=tf.random_normal_initializer()(shape=(1, 1, 1, N), dtype="float32"),
         trainable=True, dtype="float32",
-        name=self.name + '/_shifts'
+        name=self.name + '/CEL_shifts'
       )
     else:
       self._shifts = tf.constant(0.0, dtype=tf.float32)
 
     maxN = 1 + N // 2 if useHighBands and useLowBands else N
-    freq = self._createBands(scaling, maxFrequency, maxN)
+    freq = self._createBands(scaling, maxN)
     bands = []
     if useLowBands: bands.append(1.0 / freq[::-1])
     if useHighBands: bands.append(freq)
@@ -36,7 +40,12 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     self._freqDeltas = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=(N,), dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_freqDeltas'
+      name=self.name + '/CEL_freqDeltas'
+    )
+    self._freq = tf.Variable(
+      initial_value=[maxFrequency],
+      trainable=True, dtype="float32",
+      name=self.name + '/CEL_freq'
     )
 
     self._dropout = lambda x, **_: x
@@ -56,18 +65,18 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     self._fussionW = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=shapePrefix+[P, F], dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_fussionW'
+      name=self.name + '/CEL_fussionW'
     )
     self._fussionB = tf.Variable(
       initial_value=tf.random_normal_initializer()(shape=shapePrefix+[P,], dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_fussionB'
+      name=self.name + '/CEL_fussionB'
     )
     
     self._gates = tf.Variable(
       initial_value=tf.zeros(shape=(1, 1, self._N), dtype="float32"),
       trainable=True, dtype="float32",
-      name=self.name + '/_gates'
+      name=self.name + '/CEL_gates'
     )
     return
 
@@ -84,9 +93,6 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     for F in [tf.sin, tf.cos]:
       fX = F(tX)
       data.append(fX)
-      
-      #fXfX = tf.square(fX)
-      #data.append(fXfX)
       continue
     
     res = tf.concat(data, axis=-1)
@@ -94,6 +100,7 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     return tf.reshape(res, (B, M, N, res.shape[-1] * P))
   
   def call(self, x, training=None):
+    tf.assert_rank(x, 3, "Input must be (B, M, P)")
     # x is (B, M, P)
     # output is (B, M, N)
     B, M, P, N = tf.shape(x)[0], x.shape[1], x.shape[2], self._N
@@ -105,12 +112,13 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
     
     if self._raw:
       res = tf.concat([x, res], axis=-1)
-    return res
+    return self._bottleneck(res)
   
   @property
   def coefs(self):
     coefs = self._baseFreq + tf.nn.tanh(self._freqDeltas) * self._freqRange
-    return coefs[None, None, None]
+    freq = tf.nn.softplus(self._freq)
+    return coefs[None, None, None] * freq[None, None, None]
 
   @property
   def shifts(self):
@@ -136,15 +144,13 @@ class CCoordsEncodingLayer(tf.keras.layers.Layer):
       return tf.cond(training, lambda: apply(x), lambda: tf.identity(x))
     return F
   
-  def _createBands(self, scaling, maxFrequency, N):
+  def _createBands(self, scaling, N):
     if 'pow' == scaling:
-      if maxFrequency is None:
-        maxFrequency = 2.0 ** min((N, 32))
+      # 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, ... 1 / 2^N
+      maxFrequency = 2.0 ** min((N, 32))
       base = math.pow(maxFrequency, 1.0 / float(N))
       return tf.pow(base, tf.cast(tf.range(N), tf.float32))
     
     if 'linear' == scaling:
-      maxFrequency = N if maxFrequency is None else maxFrequency
-      return tf.linspace(1.0, float(maxFrequency), N)
+      return tf.linspace(1.0, float(N), N)
     return
-

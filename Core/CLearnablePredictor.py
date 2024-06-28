@@ -3,19 +3,19 @@ import Core.Utils as Utils
 import numpy
 
 class CLearnablePredictor:
-  def __init__(self, dataset, model=None):
-    self._dataset = dataset
+  def __init__(self, model, fps=30):
     self._lock = threading.Lock()
     self._done = threading.Event()
     self._inferData = None
     self._inferResults = None
     self._model = model
-    self._timesteps = 0 + self._model.timesteps
+    self._timesteps = self._model.timesteps
     self._prevSteps = []
+    self._fps = fps
     return
 
   def __enter__(self):
-    self._thread = threading.Thread(target=self._trainLoop)
+    self._thread = threading.Thread(target=self._loop)
     self._thread.start()
     return self
 
@@ -39,29 +39,20 @@ class CLearnablePredictor:
       self._inferResults = None
     return res
   
-  def _trainLoop(self):
-    while not self._done.isSet():
-      trainInfo = self._train()
-      self._infer(trainInfo)
+  def _loop(self):
+    while not self._done.wait(1.0 / self._fps):
+      self._infer()
       continue
     return
   
-  def _train(self):
-    info = {}
-    if self._model.trainable and not(self._dataset is None):
-      data = self._dataset.sample()
-      if data:
-        info = self._model.fit(data)
-    return info
-  
-  def _infer(self, trainInfo):
+  def _infer(self):
     with self._lock:
       data = self._inferData
       self._inferData = None
     if data is None: return
     
     if not(len(data) == self._timesteps): return
-    samples = [Utils.tracked2sample(x['tracked']) for x in data]
+    samples = [Utils.tracked2sample(x) for x in data]
     samples = Utils.samples2inputs(samples)
     T = numpy.diff(samples['time'], 1)
     T = numpy.insert(T, 0, 0.0)
@@ -69,12 +60,12 @@ class CLearnablePredictor:
     X = {k: x[None] for k, x in samples.items()} # (timesteps, ...) => (1, timesteps, ...)
 
     data = data[-1] # last step as current
-    
     res = self._model(X)
-    info = dict(trainInfo)
-    if not(self._dataset is None):
-      info['samples'] = len(self._dataset)
-      
+
     with self._lock:
-      self._inferResults = (res, data, info)
+      self._inferResults = (res, data, {})
     return
+  
+  @property
+  def canPredict(self):
+    return True
