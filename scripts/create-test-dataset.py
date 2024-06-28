@@ -12,6 +12,7 @@ from Core.CDataSampler import CDataSampler
 from collections import defaultdict
 import glob
 import json
+import shutil
 
 BATCH_SIZE = 128 * 4
 trainIndx = 0
@@ -105,10 +106,8 @@ def main(args):
   with open(os.path.join(folder, 'stats.json'), 'r') as f:
     stats = json.load(f)
 
-  # remove test-*.npz files from the test-main folder
-  for fname in glob.glob(os.path.join(args.output, 'test-*.npz')):
-    os.remove(fname)
-    continue
+  # remove all content from the output folder
+  shutil.rmtree(args.output, ignore_errors=True)
   # recursively find the train file
   trainFilename = glob.glob(os.path.join(folder, '**', 'test.npz'), recursive=True)
   print('Found test files:', len(trainFilename))
