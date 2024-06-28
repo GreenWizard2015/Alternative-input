@@ -124,7 +124,10 @@ def dropPadding(idx, padding):
   print('Frames before: {}. Frames after: {}'.format(len(idx), len(res)))
   return res
 
-def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, skippedFrames):
+def processFolder(
+  folder, timeDelta, testRatio, framesPerChunk, testPadding, skippedFrames,
+  minFrames
+):
   print('Processing', folder)
   dataset = loadNpz(folder)
   for k, v in dataset.items():
@@ -164,6 +167,11 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   for fn in files:
     os.remove(os.path.join(folder, fn))
   print('Removed', len(files), 'files')
+  
+  totalFrames = len(testing) + len(training)
+  if minFrames < totalFrames:
+    print('Not enough frames: %d < %d' % (totalFrames, minFrames))
+    return 0, 0
   # save training and testing sets 
   saveSubset('train.npz', training)
   saveSubset('test.npz', testing)
@@ -199,7 +207,8 @@ def main(args):
         testFramesN, trainFramesN = processFolder(
           path, 
           args.time_delta, args.test_ratio, args.frames_per_chunk,
-          args.test_padding, args.skipped_frames
+          args.test_padding, args.skipped_frames,
+          minFrames=args.min_frames
         )
         testFrames += testFramesN
         trainFrames += trainFramesN
@@ -233,6 +242,11 @@ if __name__ == '__main__':
     '--skipped-frames', type=str, default='train', choices=['train', 'test', 'drop'],
     help='What to do with skipped frames ("train", "test", or "drop")'
   )
+  parser.add_argument(
+    '--min-frames', type=int, default=0,
+    help='Minimum number of frames in a chunk'
+  )
+
   args = parser.parse_args()
   main(args)
   pass
