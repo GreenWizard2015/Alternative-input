@@ -180,6 +180,17 @@ def processFolder(
   return len(testing), len(training)
 
 def main(args):
+  # blacklisted datasets
+  blacklisted = []
+  if args.blacklist is not None:
+    with open(args.blacklist, 'r') as f:
+      blacklisted = json.load(f)
+    pass
+  blacklisted = set([
+    '/'.join(item)
+    for item in blacklisted
+  ])
+  print(blacklisted)
   stats = {
     'placeId': [],
     'userId': [],
@@ -204,6 +215,13 @@ def main(args):
         if not (sid in stats['screenId']):
           stats['screenId'].append(sid)
         path = os.path.join(folder, placeId, userId, screenId)
+        # check if the dataset is blacklisted
+        # placeId twice since real screenId is "placeId/screenId"
+        uuid = '/'.join([userId, placeId, placeId, screenId])
+        print(uuid)
+        if uuid in blacklisted:
+          print('Skipping blacklisted dataset:', path)
+          continue
         testFramesN, trainFramesN = processFolder(
           path, 
           args.time_delta, args.test_ratio, args.frames_per_chunk,
@@ -245,6 +263,10 @@ if __name__ == '__main__':
   parser.add_argument(
     '--min-frames', type=int, default=0,
     help='Minimum number of frames in a chunk'
+  )
+  parser.add_argument(
+    '--blacklist', type=str, default=None,
+    help='Path to the blacklist file'
   )
 
   args = parser.parse_args()
