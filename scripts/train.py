@@ -96,9 +96,15 @@ def evaluator(datasets, model, folder, args):
 
       dists[i] = min(dist, dists[i]) # track the best distance
       # filter the results by the distance, to ignore the outliers
-      if dists[i] < 0.1:
+      maxValue = 0.1
+      if dists[i] < maxValue:
         totalLoss.append(loss)
         totalDist.append(dist)
+      else:
+        # prevent the big "jumps" in the loss and distance when the model is becoming better
+        # assuming that maxValue is bigger than the corresponding loss
+        totalLoss.append(maxValue)
+        totalDist.append(maxValue)
       continue
     if not onlyImproved:
       print('Mean loss: %.5f | Mean distance: %.5f' % (
