@@ -57,8 +57,7 @@ class CDatasetLoader:
       for k, size in validSamples.items():
         # all datasets should have the same number of samples represented in the indices
         # so that the sampling is uniform
-        chunk = np.full((maxSize, ), k, dtype=np.uint32) % size
-        chunk = chunk.astype(dtype)
+        chunk = np.full((maxSize, ), k, dtype=dtype)
         chunks.append(chunk)
         continue
       self._indices = np.concatenate(chunks)
