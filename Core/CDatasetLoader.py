@@ -4,9 +4,14 @@ from Core.CSamplesStorage import CSamplesStorage
 from Core.CDataSampler import CDataSampler
 import numpy as np
 import tensorflow as tf
+from enum import Enum
 
+class ESampling(Enum):
+  AS_IS = 'as_is'
+  UNIFORM = 'uniform'
+  
 class CDatasetLoader:
-  def __init__(self, folder, samplerArgs, stats):
+  def __init__(self, folder, samplerArgs, sampling, stats):
     # recursively find all 'train.npz' files
     trainFiles = glob.glob(os.path.join(folder, '**', 'train.npz'), recursive=True)
     if 0 == len(trainFiles):
@@ -40,10 +45,24 @@ class CDatasetLoader:
     }
     dtype = np.uint8 if len(self._datasets) < 256 else np.uint32
     # create an array of dataset indices to sample from
-    self._indices = np.concatenate([
-      np.full((v, ), k, dtype=dtype) # id of the dataset
-      for k, v in validSamples.items()
-    ])
+    sampling = ESampling(sampling)
+    if ESampling.AS_IS == sampling: # just concatenate the indices
+      self._indices = np.concatenate([
+        np.full((v, ), k, dtype=dtype) # id of the dataset
+        for k, v in validSamples.items()
+      ])
+    if ESampling.UNIFORM == sampling:
+      maxSize = max(validSamples.values())
+      chunks = []
+      for k, size in validSamples.items():
+        # all datasets should have the same number of samples represented in the indices
+        # so that the sampling is uniform
+        chunk = np.full((maxSize, ), k, dtype=np.uint32) % size
+        chunk = chunk.astype(dtype)
+        chunks.append(chunk)
+        continue
+      self._indices = np.concatenate(chunks)
+      
     self._currentId = 0
 
     self._batchSize = samplerArgs.get('batch_size', 16)

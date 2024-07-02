@@ -226,6 +226,7 @@ def main(args):
   trainDataset = CDatasetLoader(
     os.path.join(folder, 'remote'),
     stats=stats,
+    sampling=args.sampling,
     samplerArgs=dict(
       batch_size=args.batch_size,
       minFrames=timesteps,
@@ -343,6 +344,10 @@ if __name__ == '__main__':
   )
   parser.add_argument(
     '--with-enconders', default=False, action='store_true',
+  )
+  parser.add_argument(
+    '--sampling', type=str, default='uniform',
+    choices=['uniform', 'as_is'],
   )
 
   main(parser.parse_args())
