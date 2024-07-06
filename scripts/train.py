@@ -12,6 +12,7 @@ from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
 from Core.CModelTrainer import CModelTrainer
+from Core.CModelDiffusion import CModelDiffusion
 import tqdm
 import json
 import glob
@@ -186,6 +187,7 @@ def _schedule_from_json(args):
 
 def _trainer_from(args):
   if args.trainer == 'default': return CModelTrainer
+  if args.trainer == 'diffusion': return CModelDiffusion
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def averageModels(folder, model, noiseStd=0.0):
@@ -330,7 +332,7 @@ if __name__ == '__main__':
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
     '--trainer', type=str, default='default',
-    choices=['default']
+    choices=['default', 'diffusion']
   )
   parser.add_argument(
     '--schedule', type=str, default=None,

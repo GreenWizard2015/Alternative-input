@@ -20,6 +20,11 @@ class CTimeEncoderLayer(tf.keras.layers.Layer):
     return T[..., 0, :]
 
 class IntermediatePredictor(tf.keras.layers.Layer):
+  def __init__(self, shift=0.5, **kwargs):
+    super().__init__(**kwargs)
+    self._shift = shift
+    return
+  
   def build(self, input_shape):
     self._mlp = sMLP(
       sizes=[128, 64, 32], activation='relu',
@@ -33,7 +38,7 @@ class IntermediatePredictor(tf.keras.layers.Layer):
     B = tf.shape(x)[0]
     N = tf.shape(x)[1]
     x = self._mlp(x)
-    x = 0.5 + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
+    x = self._shift + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
     tf.assert_equal(tf.shape(x), (B, N, 2))
     return x
 # End of IntermediatePredictor
@@ -138,7 +143,8 @@ def _InputSpec():
 
 def Face2LatentModel(
   pointsN=478, eyeSize=32, steps=None, latentSize=64,
-  embeddings=None
+  embeddings=None,
+  diffusion=False # whether to use diffusion model
 ):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
@@ -149,6 +155,14 @@ def Face2LatentModel(
   screenIdEmb = L.Input((steps, embeddings['size']))
   
   emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
+  if diffusion:
+    diffusionT = L.Input((steps, 1))
+    diffusionPoints = L.Input((steps, 2))
+    encodedDT = CTimeEncoderLayer()(diffusionT)
+    # shared transformation for all points
+    encodedDP = CCoordsEncodingLayer(32, sharedTransformation=True)(diffusionPoints)
+    # add diffusion features to the embeddings
+    emb = L.Concatenate(-1)([emb, encodedDT, encodedDP])  
   
   Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize=emb.shape[-1])
   Step2Latent = Step2LatentModel(latentSize, embeddingsSize=emb.shape[-1])
@@ -179,15 +193,25 @@ def Face2LatentModel(
     'placeId': placeIdEmb,
     'screenId': screenIdEmb,
   }
-
-  res['result'] = IntermediatePredictor()(res['latent'])
+  res['result'] = IntermediatePredictor(
+    shift=0.0 if diffusion else 0.5 # shift points to the center, if not using diffusion
+  )(
+    L.Concatenate(-1)([res['latent'], emb])
+  )
+  
+  if diffusion:
+    inputs['diffusionT'] = diffusionT
+    inputs['diffusionPoints'] = diffusionPoints
+    # make residuals
+    res['result'] = diffusionPoints + res['result']
+    
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
     'intermediate shapes': {k: v.shape for k, v in res['intermediate'].items()},
     'main': main,
     'Face2Step': Face2Step,
     'Step2Latent': Step2Latent,
-    'inputs specification': _InputSpec(),
+    'inputs specification': _InputSpec()
   }
   
 if __name__ == '__main__':
