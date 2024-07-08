@@ -236,6 +236,9 @@ def main(args):
       continue
   print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
+  # sort each list in stats to preserve the order between runs
+  for k, v in stats.items():
+    stats[k] = sorted(v)
   # save the stats
   with open(os.path.join(folder, 'stats.json'), 'w') as f:
     json.dump(stats, f, indent=2)
