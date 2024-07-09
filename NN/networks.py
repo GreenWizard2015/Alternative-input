@@ -90,8 +90,9 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
 
 def Step2LatentModel(latentSize, embeddingsSize):
   latents = L.Input((None, latentSize))
-  embeddings = L.Input((None, embeddingsSize))
+  embeddingsInput = L.Input((None, embeddingsSize))
   T = L.Input((None, 1))
+  embeddings = embeddingsInput[..., :1] * 0.0
 
   stepsData = latents
   intermediate = {}
@@ -115,14 +116,14 @@ def Step2LatentModel(latentSize, embeddingsSize):
     continue
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   latent = sMLP(sizes=[latentSize] * 1, activation='relu')(
-    L.Concatenate(-1)([stepsData, temporal, encodedT, encodedT])
+    L.Concatenate(-1)([stepsData, temporal, encodedT, embeddings])
   )
   latent = CFusingBlock()([stepsData, latent])
   return tf.keras.Model(
     inputs={
       'latent': latents,
       'time': T,
-      'embeddings': embeddings,
+      'embeddings': embeddingsInput,
     },
     outputs={
       'latent': latent,
@@ -195,9 +196,7 @@ def Face2LatentModel(
   }
   res['result'] = IntermediatePredictor(
     shift=0.0 if diffusion else 0.5 # shift points to the center, if not using diffusion
-  )(
-    L.Concatenate(-1)([res['latent'], emb])
-  )
+  )(res['latent'])
   
   if diffusion:
     inputs['diffusionT'] = diffusionT
