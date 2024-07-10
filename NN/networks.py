@@ -64,8 +64,10 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
   for i, EFeat in enumerate(encodedEFList):
     combined = CFusingBlock(name='F2S/ResMul-%d' % i)([
       combined,
-      sMLP(sizes=[latentSize] * 1, activation='relu', name='F2S/MLP-%d' % i)(
-        L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
+      sMLP(sizes=[latentSize] * 3, activation='relu', name='F2S/MLP-%d' % i)(
+        L.LayerNormalization()(
+          L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
+        )
       )
     ])
      # save intermediate output
@@ -74,6 +76,7 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
     continue
   
   combined = L.Dense(latentSize, name='F2S/Combine')(combined)
+  combined = L.LayerNormalization()(combined)
   # combined = CQuantizeLayer()(combined)
   return tf.keras.Model(
     inputs={
@@ -92,7 +95,7 @@ def Step2LatentModel(latentSize, embeddingsSize):
   latents = L.Input((None, latentSize))
   embeddingsInput = L.Input((None, embeddingsSize))
   T = L.Input((None, 1))
-  embeddings = embeddingsInput[..., :1] * 0.0
+  embeddings = embeddingsInput
 
   stepsData = latents
   intermediate = {}
@@ -105,11 +108,11 @@ def Step2LatentModel(latentSize, embeddingsSize):
   intermediate['S2L/enc0'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   for blockId in range(3):
-    temp = L.Concatenate(-1)([temporal, encodedT])
-    for _ in range(1):
+    temp = L.Concatenate(-1)([temporal, encodedT, embeddings])
+    for _ in range(3):
       temp = L.LSTM(latentSize, return_sequences=True)(temp)
-    temp = sMLP(sizes=[latentSize] * 1, activation='relu')(
-      L.Concatenate(-1)([temporal, temp])
+    temp = sMLP(sizes=[latentSize] * 3, activation='relu')(
+      L.Concatenate(-1)([temporal, temp, encodedT, embeddings])
     )
     temporal = CFusingBlock()([temporal, temp])
     intermediate['S2L/ResLSTM-%d' % blockId] = temporal
@@ -165,6 +168,7 @@ def Face2LatentModel(
     # add diffusion features to the embeddings
     emb = L.Concatenate(-1)([emb, encodedDT, encodedDP])  
   
+  emb = L.LayerNormalization()(emb)
   Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize=emb.shape[-1])
   Step2Latent = Step2LatentModel(latentSize, embeddingsSize=emb.shape[-1])
 
@@ -196,7 +200,9 @@ def Face2LatentModel(
   }
   res['result'] = IntermediatePredictor(
     shift=0.0 if diffusion else 0.5 # shift points to the center, if not using diffusion
-  )(res['latent'])
+  )(
+    L.Concatenate(-1)([res['latent'], T, emb])
+  )
   
   if diffusion:
     inputs['diffusionT'] = diffusionT
