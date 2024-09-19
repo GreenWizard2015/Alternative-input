@@ -5,7 +5,8 @@ import numpy as np
 import time
 
 class CEyeTracker:
-  def __init__(self):
+  def __init__(self, webcam=0):
+    self._webcam = webcam
     self._PRESENCE_THRESHOLD = self._VISIBILITY_THRESHOLD = 0.5
 
     self._leftEyeIdx = np.array(list(Utils.PART_TO_INDECES['left eye']), np.int32)
@@ -13,7 +14,7 @@ class CEyeTracker:
     return
 
   def __enter__(self):
-    cap = self._capture = cv2.VideoCapture(0)
+    cap = self._capture = cv2.VideoCapture(self._webcam)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 768)
