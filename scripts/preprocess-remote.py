@@ -147,9 +147,9 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
 
   if dropZeroDeltas: # drop frames with zero time deltas
     deltas = np.diff(dataset['time'])
-    idx = np.where(0 == deltas)[0]
+    idx = np.where(0 < deltas)[0]
     print('Dropping {} frames with zero time deltas'.format(len(idx)))
-    dataset = {k: np.delete(v, idx) for k, v in dataset.items()}
+    dataset = {k: v[idx] for k, v in dataset.items()}
 
   N = len(dataset['time'])    
   # print total deltas statistics
@@ -201,6 +201,8 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   # save training and testing sets 
   saveSubset('train.npz', training)
   saveSubset('test.npz', testing)
+
+  print(', '.join(['%s: %s' % (k, v.shape) for k, v in dataset.items()]))
 
   print('Processing ', folder, 'done')
   return len(testing), len(training), False
