@@ -130,6 +130,10 @@ def dropPadding(idx, padding):
 
 def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, skippedFrames, minimumFrames, dropZeroDeltas):
   print('Processing', folder)
+  stats = {
+    'deltas': [],
+    'durations': [],
+  }
   # load all.npz file if it exists
   all_file = os.path.join(folder, 'all.npz')
   if os.path.exists(all_file):
@@ -160,7 +164,7 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
 
   if N < minimumFrames:
     print('Dataset is too short. Skipping...')
-    return 0, 0, True
+    return 0, 0, True, None
   # split dataset into sessions
   sessions = Utils.extractSessions(dataset, float(timeDelta))
   # print sessions and their durations for debugging
@@ -174,6 +178,8 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
     print('Session {} - {}: min={}, max={}, mean={}, frames={}, duration={} sec'.format(
       start, end, np.min(delta), np.max(delta), np.mean(delta), len(session_time), duration
     ))
+    stats['deltas'].append(delta)
+    stats['durations'].append(duration)
     continue
   ######################################################
   # split each session into training and testing sets
@@ -205,7 +211,7 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   print(', '.join(['%s: %s' % (k, v.shape) for k, v in dataset.items()]))
 
   print('Processing ', folder, 'done')
-  return len(testing), len(training), False
+  return len(testing), len(training), False, stats
 
 def main(args):
   stats = {
@@ -219,6 +225,10 @@ def main(args):
   folder = args.folder
   foldersList = lambda x: [nm for nm in os.listdir(x) if os.path.isdir(os.path.join(x, nm))]
   subfolders = foldersList(folder)
+  globalStats = {
+    'deltas': [],
+    'durations': [],
+  }
   for placeId in subfolders:
     if not (placeId in stats['placeId']):
       stats['placeId'].append(placeId)
@@ -232,7 +242,7 @@ def main(args):
         if not (sid in stats['screenId']):
           stats['screenId'].append(sid)
         path = os.path.join(folder, placeId, userId, screenId)
-        testFramesN, trainFramesN, isSkipped = processFolder(
+        testFramesN, trainFramesN, isSkipped, new_stats = processFolder(
           path, 
           args.time_delta, args.test_ratio, args.frames_per_chunk,
           args.test_padding, args.skipped_frames,
@@ -245,6 +255,8 @@ def main(args):
           # store the number of frames per chunk
           sid = '%s/%s/%s' % (placeId, userId, screenId)
           framesPerChunk[sid] = testFramesN + trainFramesN
+          for k, v in new_stats.items():
+            globalStats[k].extend(v)
       continue
   print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
@@ -255,6 +267,22 @@ def main(args):
   print('-' * 80)
   for k, v in framesPerChunk.items():
     print('%s: %d frames' % (k, v))
+  ###########################################
+  def plot_histogram(data, title, filename):
+    import matplotlib.pyplot as plt
+    plt.hist(data, bins=100)
+    plt.title(title)
+    plt.grid()
+    plt.savefig(filename)
+    plt.close()
+    plt.clf()
+    return
+  
+  for k, v in globalStats.items():
+    if 0 == len(v): continue
+    v = np.concatenate(v)
+    plot_histogram(v, 'Histogram of %s' % k, os.path.join(folder, '%s.png' % k))
+    continue
   return
 
 if __name__ == '__main__':
