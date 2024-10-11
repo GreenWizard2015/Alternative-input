@@ -20,6 +20,11 @@ class CTimeEncoderLayer(tf.keras.layers.Layer):
     return T[..., 0, :]
 
 class IntermediatePredictor(tf.keras.layers.Layer):
+  def __init__(self, shift=0.5, **kwargs):
+    super().__init__(**kwargs)
+    self._shift = shift
+    return
+  
   def build(self, input_shape):
     self._mlp = sMLP(
       sizes=[128, 64, 32], activation='relu',
@@ -33,7 +38,7 @@ class IntermediatePredictor(tf.keras.layers.Layer):
     B = tf.shape(x)[0]
     N = tf.shape(x)[1]
     x = self._mlp(x)
-    x = 0.5 + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
+    x = self._shift + self._decodePoints(x) # [0, 0] -> [0.5, 0.5]
     tf.assert_equal(tf.shape(x), (B, N, 2))
     return x
 # End of IntermediatePredictor
@@ -59,8 +64,10 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
   for i, EFeat in enumerate(encodedEFList):
     combined = CFusingBlock(name='F2S/ResMul-%d' % i)([
       combined,
-      sMLP(sizes=[latentSize] * 1, activation='relu', name='F2S/MLP-%d' % i)(
-        L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
+      sMLP(sizes=[latentSize] * 3, activation='relu', name='F2S/MLP-%d' % i)(
+        L.LayerNormalization()(
+          L.Concatenate(-1)([combined, encodedP, EFeat, embeddings])
+        )
       )
     ])
      # save intermediate output
@@ -69,6 +76,7 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
     continue
   
   combined = L.Dense(latentSize, name='F2S/Combine')(combined)
+  combined = L.LayerNormalization()(combined)
   # combined = CQuantizeLayer()(combined)
   return tf.keras.Model(
     inputs={
@@ -85,8 +93,9 @@ def Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize):
 
 def Step2LatentModel(latentSize, embeddingsSize):
   latents = L.Input((None, latentSize))
-  embeddings = L.Input((None, embeddingsSize))
+  embeddingsInput = L.Input((None, embeddingsSize))
   T = L.Input((None, 1))
+  embeddings = embeddingsInput
 
   stepsData = latents
   intermediate = {}
@@ -99,25 +108,25 @@ def Step2LatentModel(latentSize, embeddingsSize):
   intermediate['S2L/enc0'] = temporal
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   for blockId in range(3):
-    temp = L.Concatenate(-1)([temporal, encodedT])
-    for _ in range(1):
+    temp = L.Concatenate(-1)([temporal, encodedT, embeddings])
+    for _ in range(3):
       temp = L.LSTM(latentSize, return_sequences=True)(temp)
-    temp = sMLP(sizes=[latentSize] * 1, activation='relu')(
-      L.Concatenate(-1)([temporal, temp])
+    temp = sMLP(sizes=[latentSize] * 3, activation='relu')(
+      L.Concatenate(-1)([temporal, temp, encodedT, embeddings])
     )
     temporal = CFusingBlock()([temporal, temp])
     intermediate['S2L/ResLSTM-%d' % blockId] = temporal
     continue
   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
   latent = sMLP(sizes=[latentSize] * 1, activation='relu')(
-    L.Concatenate(-1)([stepsData, temporal, encodedT, encodedT])
+    L.Concatenate(-1)([stepsData, temporal, encodedT, embeddings])
   )
   latent = CFusingBlock()([stepsData, latent])
   return tf.keras.Model(
     inputs={
       'latent': latents,
       'time': T,
-      'embeddings': embeddings,
+      'embeddings': embeddingsInput,
     },
     outputs={
       'latent': latent,
@@ -138,7 +147,8 @@ def _InputSpec():
 
 def Face2LatentModel(
   pointsN=478, eyeSize=32, steps=None, latentSize=64,
-  embeddings=None
+  embeddings=None,
+  diffusion=False # whether to use diffusion model
 ):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
@@ -149,7 +159,16 @@ def Face2LatentModel(
   screenIdEmb = L.Input((steps, embeddings['size']))
   
   emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
+  if diffusion:
+    diffusionT = L.Input((steps, 1))
+    diffusionPoints = L.Input((steps, 2))
+    encodedDT = CTimeEncoderLayer()(diffusionT)
+    # shared transformation for all points
+    encodedDP = CCoordsEncodingLayer(32, sharedTransformation=True)(diffusionPoints)
+    # add diffusion features to the embeddings
+    emb = L.Concatenate(-1)([emb, encodedDT, encodedDP])  
   
+  emb = L.LayerNormalization()(emb)
   Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize=emb.shape[-1])
   Step2Latent = Step2LatentModel(latentSize, embeddingsSize=emb.shape[-1])
 
@@ -179,15 +198,25 @@ def Face2LatentModel(
     'placeId': placeIdEmb,
     'screenId': screenIdEmb,
   }
-
-  res['result'] = IntermediatePredictor()(res['latent'])
+  res['result'] = IntermediatePredictor(
+    shift=0.0 if diffusion else 0.5 # shift points to the center, if not using diffusion
+  )(
+    L.Concatenate(-1)([res['latent'], T, emb])
+  )
+  
+  if diffusion:
+    inputs['diffusionT'] = diffusionT
+    inputs['diffusionPoints'] = diffusionPoints
+    # make residuals
+    res['result'] = diffusionPoints + res['result']
+    
   main = tf.keras.Model(inputs=inputs, outputs=res)
   return {
     'intermediate shapes': {k: v.shape for k, v in res['intermediate'].items()},
     'main': main,
     'Face2Step': Face2Step,
     'Step2Latent': Step2Latent,
-    'inputs specification': _InputSpec(),
+    'inputs specification': _InputSpec()
   }
   
 if __name__ == '__main__':

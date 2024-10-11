@@ -237,6 +237,7 @@ class CFusingBlock(tf.keras.Model):
     if mlp is None: mlp = lambda x: x
     self._mlp = mlp
     self._norm = L.LayerNormalization()
+    self._norm2 = L.LayerNormalization()
     return
   
   def build(self, input_shapes):
@@ -253,14 +254,15 @@ class CFusingBlock(tf.keras.Model):
     xhat = self._lastDense(xhat)
     x0 = x[0]
     x = tf.concat([x0, xhat], axis=-1)
-    return self._combiner(x)
+    res = self._combiner(x)
+    return self._norm2(res)
 ####################################
 # Hacky way to provide same optimizer for all models
 def createOptimizer(config=None):
   if config is None:
     config = {
       'learning_rate': 1e-4,
-      'weight_decay': 1e-1,
+      'weight_decay': 1e-4,
       'exclude_from_weight_decay': [
         'batch_normalization', 'bias',
         'CEL_', # exclude CCoordsEncodingLayer from weight decay

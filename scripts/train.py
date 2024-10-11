@@ -12,6 +12,7 @@ from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
 from Core.CModelTrainer import CModelTrainer
+from Core.CModelDiffusion import CModelDiffusion
 import tqdm
 import json
 import glob
@@ -75,7 +76,8 @@ def evaluator(datasets, model, folder, args):
   losses = [np.inf] * len(datasets) # initialize with infinity
   dists = [np.inf] * len(datasets) # initialize with infinity
   def evaluate(onlyImproved=False):
-    totalLoss = totalDist = 0.0
+    totalLoss = []
+    totalDist = []
     losses_dist = []
     for i, dataset in enumerate(datasets):
       loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
@@ -94,14 +96,14 @@ def evaluator(datasets, model, folder, args):
         pass
 
       dists[i] = min(dist, dists[i]) # track the best distance
-      totalLoss += loss
-      totalDist += dist
+      totalLoss.append(loss)
+      totalDist.append(dist)
       continue
     if not onlyImproved:
       print('Mean loss: %.5f | Mean distance: %.5f' % (
-        totalLoss / len(datasets), totalDist / len(datasets)
+        np.mean(totalLoss), np.mean(totalDist)
       ))
-    return totalLoss / len(datasets), losses_dist
+    return np.mean(totalLoss), losses_dist
   return evaluate
 
 def _modelTrainingLoop(model, dataset):
@@ -185,6 +187,7 @@ def _schedule_from_json(args):
 
 def _trainer_from(args):
   if args.trainer == 'default': return CModelTrainer
+  if args.trainer == 'diffusion': return CModelDiffusion
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def averageModels(folder, model, noiseStd=0.0):
@@ -225,6 +228,7 @@ def main(args):
   trainDataset = CDatasetLoader(
     os.path.join(folder, 'remote'),
     stats=stats,
+    sampling=args.sampling,
     samplerArgs=dict(
       batch_size=args.batch_size,
       minFrames=timesteps,
@@ -328,7 +332,7 @@ if __name__ == '__main__':
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
     '--trainer', type=str, default='default',
-    choices=['default']
+    choices=['default', 'diffusion']
   )
   parser.add_argument(
     '--schedule', type=str, default=None,
@@ -342,6 +346,10 @@ if __name__ == '__main__':
   )
   parser.add_argument(
     '--with-enconders', default=False, action='store_true',
+  )
+  parser.add_argument(
+    '--sampling', type=str, default='uniform',
+    choices=['uniform', 'as_is'],
   )
 
   main(parser.parse_args())

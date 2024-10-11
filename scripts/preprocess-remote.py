@@ -204,7 +204,8 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
     assert np.all(diff >= 0), 'Time is not monotonically increasing!'
     np.savez(os.path.join(folder, filename), **subset)
     return
-  # save training and testing sets 
+  
+  # save training and testing sets
   saveSubset('train.npz', training)
   saveSubset('test.npz', testing)
 
@@ -214,6 +215,17 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   return len(testing), len(training), False, stats
 
 def main(args):
+  # blacklisted datasets
+  blacklisted = []
+  if args.blacklist is not None:
+    with open(args.blacklist, 'r') as f:
+      blacklisted = json.load(f)
+    pass
+  blacklisted = set([
+    '/'.join(item)
+    for item in blacklisted
+  ])
+  print(blacklisted)
   stats = {
     'placeId': [],
     'userId': [],
@@ -260,6 +272,9 @@ def main(args):
       continue
   print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
+  # sort each list in stats to preserve the order between runs
+  for k, v in stats.items():
+    stats[k] = sorted(v)
   # save the stats
   with open(os.path.join(folder, 'stats.json'), 'w') as f:
     json.dump(stats, f, indent=2)
@@ -302,6 +317,7 @@ if __name__ == '__main__':
   )
   parser.add_argument('--minimum-frames', type=int, default=0, help='Minimum number of frames in a dataset')
   parser.add_argument('--drop-zero-deltas', action='store_true', help='Drop frames with zero time deltas')
+
   args = parser.parse_args()
   main(args)
   pass
