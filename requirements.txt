@@ -1,8 +1,9 @@
-tensorflow==2.7.0
-tensorflow-probability==0.15.0
+tensorflow==2.15.0
+tensorflow-probability==0.22.0
 mediapipe==0.9.1.0
 numpy
 opencv-python
 pygame
 scipy
 tqdm
+cv2_enumerate_cameras

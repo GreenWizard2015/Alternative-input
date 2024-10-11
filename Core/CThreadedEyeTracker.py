@@ -2,15 +2,16 @@ from Core.CEyeTracker import CEyeTracker
 import threading
 
 class CThreadedEyeTracker:
-  def __init__(self, fps=30):
+  def __init__(self, fps=30, webcam=0):
     self._lock = threading.Lock()
     self._done = threading.Event()
     self._results = None
     self._fps = fps
+    self._webcam = webcam
     return
 
   def __enter__(self):
-    self._tracker = CEyeTracker()
+    self._tracker = CEyeTracker(webcam=self._webcam)
     self._tracker.__enter__()
     
     self._thread = threading.Thread(target=self._trackLoop)

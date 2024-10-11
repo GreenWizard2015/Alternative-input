@@ -6,7 +6,11 @@ from functools import lru_cache
 import Core.CDataSampler_utils as DSUtils
 
 class CDataSampler:
-  def __init__(self, storage, batch_size, minFrames, defaults={}, maxT=1.0):
+  def __init__(self, storage, batch_size, minFrames, defaults={}, maxT=1.0, cumulative_time=True):
+    '''
+    If cumulative_time is True, then time is a cumulative time from the start of the trajectory i.e. [0, 0.1, 0.2, 0.3, ...]
+    If cumulative_time is False, then time is a time delta between frames i.e. [0, 0.1, 0.1, 0.1, ...]
+    '''
     self._storage = storage
     self._defaults = defaults
     self._batchSize = batch_size
@@ -14,6 +18,7 @@ class CDataSampler:
     self._minFrames = minFrames
     self._samples = []
     self._currentSample = None
+    self._cumulative_time = cumulative_time
     return
   
   def reset(self):
@@ -118,6 +123,9 @@ class CDataSampler:
       pass
     T = np.insert(T, 0, 0.0)
     assert len(res) == len(T)
+    # T is an array of time deltas like [0, 0.1, 0.1, 0.1, ...], convert it to cumulative time
+    if self._cumulative_time:
+      T = np.cumsum(T)
     return T
   
   def _framesFor(self, mainInd, samples, steps, stepsSampling):

@@ -80,7 +80,7 @@ def splitDataset(dataset, ratio, framesPerChunk, skipAction):
   for i, (start, end) in enumerate(dataset):
     trainingIdx = testingIdx = []
     if (end - start) < 2 * framesPerChunk:
-      print('Session %d is too short. Action: %s' % (i, skipAction))
+      # print('Session %d is too short. Action: %s' % (i, skipAction))
       if 'drop' == skipAction: continue
 
       rng = np.arange(start, end)
@@ -93,6 +93,9 @@ def splitDataset(dataset, ratio, framesPerChunk, skipAction):
     if 0 < len(trainingIdx): trainingSet.append(trainingIdx)
     if 0 < len(testingIdx): testing.append(testingIdx)
     continue
+  if (0 == len(trainingSet)) or (0 == len(testing)):
+    print('No training or testing sets was created!')
+    return [], []
   # save training and testing sets
   testing = np.sort(np.concatenate(testing))
   training = np.sort(np.concatenate(trainingSet))
@@ -108,6 +111,7 @@ def splitDataset(dataset, ratio, framesPerChunk, skipAction):
 
 def dropPadding(idx, padding):
   res = []
+  if len(idx) < 2: return res
   # find consecutive frames chunks, save their start and end indices
   gaps = np.where(1 < np.diff(idx))[0]
   gaps = np.concatenate(([0], 1 + gaps, [len(idx)]))
@@ -120,26 +124,62 @@ def dropPadding(idx, padding):
   res = [chunk[padding:-padding] for chunk in res]
   # remove chunks that are too short
   res = [chunk for chunk in res if padding < len(chunk)]
-  res = np.concatenate(res)
+  res = np.concatenate(res) if 0 < len(res) else []
   print('Frames before: {}. Frames after: {}'.format(len(idx), len(res)))
   return res
 
-def processFolder(
-  folder, timeDelta, testRatio, framesPerChunk, testPadding, skippedFrames,
-  minFrames
-):
+def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, skippedFrames, minimumFrames, dropZeroDeltas):
   print('Processing', folder)
-  dataset = loadNpz(folder)
-  for k, v in dataset.items():
-    print(k, v.shape)
+  stats = {
+    'deltas': [],
+    'durations': [],
+  }
+  # load all.npz file if it exists
+  all_file = os.path.join(folder, 'all.npz')
+  if os.path.exists(all_file):
+    dataset = loadNpz(all_file)
+  else:
+    dataset = loadNpz(folder)
+    np.savez(all_file, **dataset)
 
+  # remove the npz files, except for all.npz
+  files = os.listdir(folder)
+  for fn in files:
+    if fn.endswith('.npz') and not ('all.npz' == fn):
+      os.remove(os.path.join(folder, fn))
+  print('Removed', len(files), 'files')
+
+  if dropZeroDeltas: # drop frames with zero time deltas
+    deltas = np.diff(dataset['time'])
+    idx = np.where(0 < deltas)[0]
+    print('Dropping {} frames with zero time deltas'.format(len(idx)))
+    dataset = {k: v[idx] for k, v in dataset.items()}
+
+  N = len(dataset['time'])    
+  # print total deltas statistics
+  print('Dataset: {} frames'.format(N))
+  deltas = np.diff(dataset['time'])
+  print('Total time deltas: min={}, max={}, mean={}'.format(np.min(deltas), np.max(deltas), np.mean(deltas)))
+  deltas = None
+
+  if N < minimumFrames:
+    print('Dataset is too short. Skipping...')
+    return 0, 0, True, None
   # split dataset into sessions
   sessions = Utils.extractSessions(dataset, float(timeDelta))
   # print sessions and their durations for debugging
   print('Found {} sessions'.format(len(sessions)))
   for i, (start, end) in enumerate(sessions):
-    duration = dataset['time'][end - 1] - dataset['time'][start]
-    print('Session {}: {} - {} ({}, {})'.format(i, start, end, end - start, duration))
+    idx = np.arange(start, end)
+    session_time = dataset['time'][idx]
+    delta = np.diff(session_time)
+    duration = session_time[-1] - session_time[0]
+    # print also min, max, and mean time deltas
+    print('Session {} - {}: min={}, max={}, mean={}, frames={}, duration={} sec'.format(
+      start, end, np.min(delta), np.max(delta), np.mean(delta), len(session_time), duration
+    ))
+    stats['deltas'].append(delta)
+    stats['durations'].append(duration)
     continue
   ######################################################
   # split each session into training and testing sets
@@ -149,21 +189,13 @@ def processFolder(
     framesPerChunk=int(framesPerChunk),
     skipAction=skippedFrames,
   )
-  
   if 0 < testPadding:
     testing = dropPadding(testing, testPadding)
 
-  # remove the npz files
-  files = os.listdir(folder)
-  for fn in files:
-    os.remove(os.path.join(folder, fn))
-  print('Removed', len(files), 'files')
-  
-  totalFrames = len(testing) + len(training)
-  if totalFrames < minFrames:
-    print('Not enough frames: %d < %d' % (totalFrames, minFrames))
-    return 0, 0
-  # save training and testing sets 
+  if (0 == len(training)) or (0 == len(testing)):
+    print('No training or testing sets found!')
+    return 0, 0, True
+
   def saveSubset(filename, idx):
     print('%s: %d frames' % (filename, len(idx)))
     subset = {k: v[idx] for k, v in dataset.items()}
@@ -172,12 +204,15 @@ def processFolder(
     assert np.all(diff >= 0), 'Time is not monotonically increasing!'
     np.savez(os.path.join(folder, filename), **subset)
     return
-
+  
+  # save training and testing sets
   saveSubset('train.npz', training)
   saveSubset('test.npz', testing)
 
+  print(', '.join(['%s: %s' % (k, v.shape) for k, v in dataset.items()]))
+
   print('Processing ', folder, 'done')
-  return len(testing), len(training)
+  return len(testing), len(training), False, stats
 
 def main(args):
   # blacklisted datasets
@@ -202,6 +237,10 @@ def main(args):
   folder = args.folder
   foldersList = lambda x: [nm for nm in os.listdir(x) if os.path.isdir(os.path.join(x, nm))]
   subfolders = foldersList(folder)
+  globalStats = {
+    'deltas': [],
+    'durations': [],
+  }
   for placeId in subfolders:
     if not (placeId in stats['placeId']):
       stats['placeId'].append(placeId)
@@ -215,24 +254,21 @@ def main(args):
         if not (sid in stats['screenId']):
           stats['screenId'].append(sid)
         path = os.path.join(folder, placeId, userId, screenId)
-        # check if the dataset is blacklisted
-        # placeId twice since real screenId is "placeId/screenId"
-        uuid = '/'.join([userId, placeId, placeId, screenId])
-        print(uuid)
-        if uuid in blacklisted:
-          print('Skipping blacklisted dataset:', path)
-          continue
-        testFramesN, trainFramesN = processFolder(
+        testFramesN, trainFramesN, isSkipped, new_stats = processFolder(
           path, 
           args.time_delta, args.test_ratio, args.frames_per_chunk,
           args.test_padding, args.skipped_frames,
-          minFrames=args.min_frames
+          minimumFrames=args.minimum_frames,
+          dropZeroDeltas=args.drop_zero_deltas
         )
-        testFrames += testFramesN
-        trainFrames += trainFramesN
-        # store the number of frames per chunk
-        sid = '%s/%s/%s' % (placeId, userId, screenId)
-        framesPerChunk[sid] = testFramesN + trainFramesN
+        if not isSkipped:
+          testFrames += testFramesN
+          trainFrames += trainFramesN
+          # store the number of frames per chunk
+          sid = '%s/%s/%s' % (placeId, userId, screenId)
+          framesPerChunk[sid] = testFramesN + trainFramesN
+          for k, v in new_stats.items():
+            globalStats[k].extend(v)
       continue
   print('Total: %d training frames, %d testing frames' % (trainFrames, testFrames))
 
@@ -246,6 +282,22 @@ def main(args):
   print('-' * 80)
   for k, v in framesPerChunk.items():
     print('%s: %d frames' % (k, v))
+  ###########################################
+  def plot_histogram(data, title, filename):
+    import matplotlib.pyplot as plt
+    plt.hist(data, bins=100)
+    plt.title(title)
+    plt.grid()
+    plt.savefig(filename)
+    plt.close()
+    plt.clf()
+    return
+  
+  for k, v in globalStats.items():
+    if 0 == len(v): continue
+    v = np.concatenate(v)
+    plot_histogram(v, 'Histogram of %s' % k, os.path.join(folder, '%s.png' % k))
+    continue
   return
 
 if __name__ == '__main__':
@@ -263,14 +315,8 @@ if __name__ == '__main__':
     '--skipped-frames', type=str, default='train', choices=['train', 'test', 'drop'],
     help='What to do with skipped frames ("train", "test", or "drop")'
   )
-  parser.add_argument(
-    '--min-frames', type=int, default=0,
-    help='Minimum number of frames in a chunk'
-  )
-  parser.add_argument(
-    '--blacklist', type=str, default=None,
-    help='Path to the blacklist file'
-  )
+  parser.add_argument('--minimum-frames', type=int, default=0, help='Minimum number of frames in a dataset')
+  parser.add_argument('--drop-zero-deltas', action='store_true', help='Drop frames with zero time deltas')
 
   args = parser.parse_args()
   main(args)

@@ -4,6 +4,8 @@ import numpy as np
 import pygame
 import pygame.locals as G
 import cv2
+from cv2_enumerate_cameras import enumerate_cameras
+
 from Core.CThreadedEyeTracker import CThreadedEyeTracker
 from Core.CDataset import CDataset
 from Core.CLearnablePredictor import CLearnablePredictor
@@ -21,7 +23,8 @@ class App:
   def __init__(
     self, tracker, dataset, predictor, 
     fps=30, hasPredictions=True, 
-    showWebcam=False, showFaceMesh=False, showEyes=not False
+    showWebcam=False, showFaceMesh=False, showEyes=not False,
+    current_webcam=0
   ):
     self._showFaceMesh = showFaceMesh
     self._faceMesh = None
@@ -58,6 +61,13 @@ class App:
     self._predictorMaskFace = False
     self._predictorMaskLeftEye = False
     self._predictorMaskRightEye = False
+
+    self._webcam = current_webcam
+    webcamsList = []
+    for camera_info in enumerate_cameras():
+      webcamsList.append('%s: %s' % (camera_info.index, camera_info.name))
+
+    self._webcamsList = webcamsList
     return
   
   @property
@@ -230,19 +240,21 @@ class App:
     return
   
   def _renderInfo(self, fps):
-    self.drawText('Samples: %d' % (self._dataset.totalSamples, ), (5, 95), Colors.RED)
+    startPoints = (5, 95)
+    texts = []
+    texts.append(('Samples: %d' % (self._dataset.totalSamples, ), Colors.RED))
     modes = []
     if self._predictorMaskFace: modes.append('no face')
     if self._predictorMaskLeftEye: modes.append('no left eye')
     if self._predictorMaskRightEye: modes.append('no right eye')
 
     if 0 < len(modes):
-      self.drawText('%s' % (', '.join(modes), ), (5, 95 + 25), Colors.GREEN)
+      texts.append(('%s' % (', '.join(modes), ), Colors.GREEN))
     
-    self.drawText('FPS: %.1f' % (fps, ), (5, 95 + 25 + 25), Colors.BLACK)
+    texts.append(('FPS: %.1f' % (fps, ), Colors.BLACK))
     # print screen resolution
     wh = self.WH
-    self.drawText('Resolution: %d x %d' % (wh[0], wh[1]), (5, 95 + 25 + 25 + 25), Colors.BLACK)
+    texts.append(('Resolution: %d x %d' % (wh[0], wh[1]), Colors.BLACK))
 
     if self._showFaceMesh and not(self._faceMesh is None):
       scaled = np.multiply(self._faceMesh, self.WH[None])
@@ -251,8 +263,26 @@ class App:
         pygame.draw.circle(self._display_surf, Colors.RED, tuple(p), 2, 0)
         continue
       pass
+
+    # print webcam info
+    texts.append(('', Colors.BLACK))
+    texts.append(('Webcams:', Colors.BLACK))
+    for i, name in enumerate(self._webcamsList):
+      color = Colors.RED if i == self._webcam else Colors.BLACK
+      texts.append(('%d: %s' % (i, name), color))
+      continue
+
+    self.drawTextList(texts, startPoints, height=25)
     return
 
+  def drawTextList(self, texts, start, height):
+    x, y = start
+    for text, color in texts:
+      self.drawText(text, (x, y), color)
+      y += height
+      continue
+    return
+  
   def _renderPredictions(self):
     window = self._display_surf
     wh = np.array(window.get_size())
@@ -343,8 +373,8 @@ def _modelFromArgs(args):
 
   # My own ids hardcoded here for simplicity
   userId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
-  placeId = '29ecaa6a-d3b5-784b-887e-f50a0c6533fa'
-  screenId = placeId + '/' + '29f35417-7bb7-3c94-124c-2ae16bda235d'
+  placeId = 'de0ce61b-2fc0-02f6-efb5-22af447bfb05'
+  screenId = placeId + '/' + 'a28a2ad8-4349-b038-5af8-46a658e82543'
   return CModelWrapper(
     timesteps=args.steps,  
     user=dict(
@@ -362,10 +392,15 @@ def _predictorFromArgs(args):
   return CLearnablePredictor(model=model, fps=args.fps)
 
 def main(args):
+  # if webcam a number - convert to int
+  if args.webcam.isdigit(): args.webcam = int(args.webcam)
   folder = args.folder
-  with CThreadedEyeTracker() as tracker, CDataset(os.path.join(folder, 'Dataset'), args.steps) as dataset:
+  with CThreadedEyeTracker(webcam=args.webcam) as tracker, CDataset(os.path.join(folder, 'Dataset'), args.steps) as dataset:
     with _predictorFromArgs(args) as predictor:
-      app = App(tracker, dataset, predictor=predictor.async_infer, fps=args.fps, hasPredictions=predictor.canPredict)
+      app = App(
+        tracker, dataset, predictor=predictor.async_infer, fps=args.fps, hasPredictions=predictor.canPredict,
+        current_webcam=args.webcam
+      )
       app.run()
     pass
   return
@@ -377,5 +412,6 @@ if __name__ == '__main__':
   # if 'none' - no model will be used
   parser.add_argument('--model', type=str, default='best')
   parser.add_argument('--fps', type=int, default=30)
+  parser.add_argument('--webcam', type=str, default='0')
   main(parser.parse_args())
   pass
