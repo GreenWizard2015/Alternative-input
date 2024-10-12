@@ -1,3 +1,8 @@
+import argparse, os, sys
+# add the root folder of the project to the path
+ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
+sys.path.append(ROOT_FOLDER)
+
 from Core.Utils import setupGPU
 setupGPU() # dirty hack to setup GPU memory limit on startup
 
@@ -7,7 +12,7 @@ from NN.CCoordsEncodingLayer import CCoordsEncodingLayer
 from NN.Utils import *
 from NN.EyeEncoder import eyeEncoder
 from NN.FaceMeshEncoder import FaceMeshEncoder
-import numpy as np
+from NN.LagrangianInterpolation import lagrange_interpolation
 
 class CTimeEncoderLayer(tf.keras.layers.Layer):
   def __init__(self, **kwargs):
@@ -219,14 +224,157 @@ def Face2LatentModel(
     'inputs specification': _InputSpec()
   }
   
-if __name__ == '__main__':
-  X = Face2LatentModel(steps=5, latentSize=64,
-    embeddings={
-      'userId': 1, 'placeId': 1, 'screenId': 1, 'size': 64
+##########################
+def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=478, eyeSize=32, KP=5):
+  points = L.Input((steps, pointsN, 2))
+  eyeL = L.Input((steps, eyeSize, eyeSize, 1))
+  eyeR = L.Input((steps, eyeSize, eyeSize, 1))
+  T = L.Input((steps, 1)) # accumulative time
+  target = L.Input((steps, 2))
+  userIdEmb = L.Input((steps, embeddings['size']))
+  placeIdEmb = L.Input((steps, embeddings['size']))
+  screenIdEmb = L.Input((steps, embeddings['size']))
+
+  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
+
+  Face2Step = Face2StepModel(pointsN, eyeSize, latentSize, embeddingsSize=emb.shape[-1])
+  stepsData = Face2Step({
+    'embeddings': emb,
+    'points': points,
+    'left eye': eyeL,
+    'right eye': eyeR,
+  })
+
+  diffT = T[:, 1:] - T[:, :-1]
+  diffT = L.Concatenate(-2)([tf.zeros_like(diffT[:, :1]), diffT])
+  combinedT = L.Concatenate(-1)([T, diffT])
+  encodedT = CRolloutTimesteps(CCoordsEncodingLayer(32), name='Time')(combinedT[..., None, :])[..., 0, :]
+
+  latent = stepsData['latent']
+  # add time encoding and target position
+  targetEncoded = CRolloutTimesteps(CCoordsEncodingLayer(32), name='Target')(target[..., None, :])[..., 0, :]
+  latent = L.Concatenate(-1)([latent, encodedT, targetEncoded])
+  # flatten the latent
+  latent = L.Reshape((-1,))(latent)
+
+  # compress the latent
+  latent_N = latent.shape[-1]
+  sizes = []
+  for i in range(1, 4):
+    for _ in range(i):
+       sizes.append(max(latent_N // i, latentSize))
+       
+  sizes.append(latentSize)
+  latent = sMLP(sizes=sizes, activation='relu', name='Compress')(latent)
+  keyT = tf.linspace(0.0, 1.0, KP)[None, :]
+
+  # keyT shape: (B, KP, 1)
+  def transformKeyT(x):
+    t, x = x
+    B = tf.shape(x)[0]
+    return tf.tile(t, (B, 1))[..., None]
+  keyT = L.Lambda(transformKeyT)([keyT, latent])
+  # keyT shape: (B, KP, 1)
+  maxT = T[:, -1, None]
+  keyT = L.Concatenate(-1)([keyT, maxT * keyT]) # fractional time and absolute time
+  encodedKeyT = CRolloutTimesteps(CCoordsEncodingLayer(32), name='KeyTime')(keyT[..., None, :])[..., 0, :]
+
+  def combineKeys(x):
+    latent, keyT = x
+    latent = tf.tile(latent[..., None, :], (1, KP, 1))
+    return L.Concatenate(-1)([latent, keyT])
+  latent = L.Lambda(combineKeys)([latent, encodedKeyT])
+
+  latent = sMLP(sizes=[latentSize] * 3, activation='relu', name='CombineKeys')(latent)
+
+  main = tf.keras.Model(
+    inputs={
+      'points': points,
+      'left eye': eyeL,
+      'right eye': eyeR,
+      'time': T,
+      'target': target,
+      'userId': userIdEmb,
+      'placeId': placeIdEmb,
+      'screenId': screenIdEmb,
+    },
+    outputs={
+      'latent': latent,
     }
   )
-  X['main'].summary(expand_nested=True)
-  X['Face2Step'].summary(expand_nested=False)
-  X['Step2Latent'].summary(expand_nested=False)
-  print(X['main'].outputs)
-  pass
+  return main
+ 
+def InpaintingDecoderModel(latentSize, embeddings, pointsN=478, eyeSize=32, KP=5):
+  latentKeyPoints = L.Input((KP, latentSize))
+  T = L.Input((None, 1))
+  userIdEmb = L.Input((embeddings['size']))
+  placeIdEmb = L.Input((embeddings['size']))
+  screenIdEmb = L.Input((embeddings['size']))
+
+  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])[..., None, :]
+  # emb shape: (B, 1, 3 * embSize) 
+  def interpolateKeys(x):
+    latents, T = x
+    B = tf.shape(latents)[0]
+    keyT = tf.linspace(0.0, 1.0, KP)[None, :]
+    keyT = tf.tile(keyT, (B, 1))
+    return lagrange_interpolation(x_values=keyT, y_values=latents, x_targets=T[..., 0])
+  latents = L.Lambda(interpolateKeys, name='InterpolateKeys')([latentKeyPoints, T])
+  # latents shape: (B, N, latentSize)
+  def transformLatents(x):
+    latents, emb = x
+    N = tf.shape(latents)[1]
+    emb = tf.tile(emb, (1, N, 1)) # (B, 1, 3 * embSize) -> (B, N, 3 * embSize)
+    return L.Concatenate(-1)([latents, emb])
+  latents = L.Lambda(transformLatents, name='CombineEmb')([latents, emb])
+  # process the latents
+  latents = sMLP(sizes=[latentSize] * 3, activation='relu', name='CombineEmb/MLP')(latents)
+  # decode the latents to the face points (478, 2), two eyes (32, 32, 2) and the target (2) 
+  target = IntermediatePredictor(shift=0.5)(latents)
+  # two eyes
+  eyesN = eyeSize * eyeSize
+  eyes = sMLP(sizes=[eyesN] * 2, activation='relu')(latents)
+  eyes = L.Dense(eyesN * 2)(eyes)
+  eyes = L.Reshape((-1, eyeSize, eyeSize, 2))(eyes)
+  # face points
+  face = sMLP(sizes=[pointsN] * 2, activation='relu')(latents)
+  face = L.Dense(pointsN * 2)(face)
+  face = L.Reshape((-1, pointsN, 2))(face)
+
+  model = tf.keras.Model(
+    inputs={
+      'keyPoints': latentKeyPoints,
+      'time': T,
+      'userId': userIdEmb,
+      'placeId': placeIdEmb,
+      'screenId': screenIdEmb,
+    },
+    outputs={
+      'target': target,
+      'left eye': eyes[:, :, 0],
+      'right eye': eyes[:, :, 1],
+      'face': face,
+    }
+  )
+  return model
+
+
+if __name__ == '__main__':
+  # X = InpaintingEncoderModel(latentSize=256, embeddings={
+  #   'size': 64
+  # })
+  X = InpaintingDecoderModel(latentSize=256, embeddings={
+    'size': 64
+  })
+  X.summary(expand_nested=False)
+
+  # X = Face2LatentModel(steps=5, latentSize=64,
+  #   embeddings={
+  #     'userId': 1, 'placeId': 1, 'screenId': 1, 'size': 64
+  #   }
+  # )
+  # X['main'].summary(expand_nested=True)
+  # X['Face2Step'].summary(expand_nested=False)
+  # X['Step2Latent'].summary(expand_nested=False)
+  # print(X['main'].outputs)
+  # pass
