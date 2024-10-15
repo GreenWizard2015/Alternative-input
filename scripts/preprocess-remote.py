@@ -179,7 +179,7 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
       start, end, np.min(delta), np.max(delta), np.mean(delta), len(session_time), duration
     ))
     stats['deltas'].append(delta)
-    stats['durations'].append(duration)
+    stats['durations'].append([duration])
     continue
   ######################################################
   # split each session into training and testing sets
@@ -215,17 +215,6 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
   return len(testing), len(training), False, stats
 
 def main(args):
-  # blacklisted datasets
-  blacklisted = []
-  if args.blacklist is not None:
-    with open(args.blacklist, 'r') as f:
-      blacklisted = json.load(f)
-    pass
-  blacklisted = set([
-    '/'.join(item)
-    for item in blacklisted
-  ])
-  print(blacklisted)
   stats = {
     'placeId': [],
     'userId': [],
