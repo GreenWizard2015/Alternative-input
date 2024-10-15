@@ -11,7 +11,7 @@ class ESampling(Enum):
   UNIFORM = 'uniform'
   
 class CDatasetLoader:
-  def __init__(self, folder, samplerArgs, sampling, stats):
+  def __init__(self, folder, samplerArgs, sampling, stats, sampler_class):
     # recursively find all 'train.npz' files
     trainFiles = glob.glob(os.path.join(folder, '**', 'train.npz'), recursive=True)
     if 0 == len(trainFiles):
@@ -26,7 +26,7 @@ class CDatasetLoader:
       # extract the placeId, userId, and screenId
       parts = os.path.split(trainFile)[0].split(os.path.sep)
       placeId, userId, screenId = parts[-3], parts[-2], parts[-1]
-      ds = CDataSampler(
+      ds = sampler_class(
         CSamplesStorage(
           placeId=stats['placeId'].index(placeId),
           userId=stats['userId'].index(userId),
@@ -98,45 +98,16 @@ class CDatasetLoader:
 
   def sample(self, **kwargs):
     batchSize = kwargs.get('batch_size', self._batchSize)
-    resX = []
-    resY = []
+    samples = []
     totalSamples = 0
     # find the datasets ids and the number of samples to take from each dataset
     datasetIds, counts = self._getBatchStats(batchSize)
     for datasetId, N in zip(datasetIds, counts):
       dataset = self._datasets[datasetId]
-      x, (y, ) = dataset.sample(N=N, **kwargs)
-      assert len(y) == N, 'Invalid number of samples: %d != %d' % (len(y), N)
-      resX.append(x)
-      resY.append(y)
-      totalSamples += len(y)
+      sampled = dataset.sample(N=N, **kwargs)
+      samples.append(sampled)
+      totalSamples += N
       continue
     
-    resY = np.concatenate(resY, axis=0)
-    assert resY.shape[0] == batchSize, 'Invalid shape: %s' % (resY.shape, )
-    assert resY.shape[-1] == 2, 'Invalid shape: %s' % (resY.shape, )
-    assert len(resY.shape) == 4, 'Invalid shape: %s' % (resY.shape, )
-
-    # sampled data has 'clean' and 'augmented' keys
-    output = {}
-    for nm in ['clean', 'augmented']:
-      keys = resX[0][nm].keys()
-      output[nm] = {k: tf.concat([x[nm][k] for x in resX], axis=0) for k in keys}
-      continue
-    return output, (resY,)
-  
-if __name__ == '__main__':
-  import cv2
-  folder = os.path.dirname(__file__)
-  ds = CDatasetLoader(
-    os.path.join(folder, 'Dataset'), batch_size=16, 
-    batchPerEpoch=1, steps=5
-  )
-  print(len(ds))
-  batchX, batchY = ds[0]
-  print(batchY[0].shape)
-  print(batchX[1].shape)
-  img = batchX[1][0, 0]
-  cv2.imshow('L', cv2.resize(img, (256, 256)))
-  cv2.waitKey()
-  pass
+    first_dataset = self._datasets[0]
+    return first_dataset.merge(samples, batchSize)

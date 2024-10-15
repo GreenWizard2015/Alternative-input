@@ -20,6 +20,7 @@ import gzip
 import shutil
 import numpy as np
 import requests
+from Core.Utils import FACE_MESH_POINTS
 
 folder = os.path.join(ROOT_FOLDER, 'Data')
 
@@ -65,10 +66,10 @@ def deserialize(buffer):
     offset += EYE_COUNT
     
     # Read points (float32)
-    sample['points'] = np.frombuffer(buffer, dtype='>f4', count=2*478, offset=offset) \
-      .reshape(478, 2)
+    sample['points'] = np.frombuffer(buffer, dtype='>f4', count=2*FACE_MESH_POINTS, offset=offset) \
+      .reshape(FACE_MESH_POINTS, 2)
     assert np.all(-2 <= sample['points']) and np.all(sample['points'] <= 2), 'Invalid points'
-    offset += 4 * 2 * 478
+    offset += 4 * 2 * FACE_MESH_POINTS
     
     # Read goal (float32)
     sample['goal'] = goal = np.frombuffer(buffer, dtype='>f4', count=2, offset=offset)

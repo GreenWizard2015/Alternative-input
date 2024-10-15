@@ -1,11 +1,12 @@
 from .CBaseDataSampler import CBaseDataSampler
 import Core.CDataSampler_utils as DSUtils
+from Core.Utils import FACE_MESH_POINTS
 
 import numpy as np
-from functools import lru_cache
 
 '''
 This sampler are sample N frames from the dataset, where N is the number of timesteps.
+Within the range of the N sampled frames, its samples K frames to be inpainted/reconstructed.
 It returns the tuple (X, Y), where X is the input data and Y is the target data.
 To X could be applied some augmentations.
 X contains the following data:
@@ -13,11 +14,16 @@ X contains the following data:
   - The left eye.
   - The right eye.
   - The time (cumulative or delta).
+  - The target point.
   - The user ID, place ID, and screen ID.
-Y contains the target data.
+Y contains the target data, K frames to be inpainted/reconstructed.
+  - The points of the face.
+  - The left eye.
+  - The right eye.
+  - The normalized time.
   - The target point.
 '''
-class CDataSampler(CBaseDataSampler):
+class CDataSamplerInpainting(CBaseDataSampler):
     def __init__(self, storage, batch_size, minFrames, defaults={}, maxT=1.0, cumulative_time=True):
         super().__init__(storage, batch_size, minFrames, defaults, maxT, cumulative_time)
 
@@ -92,18 +98,10 @@ class CDataSampler(CBaseDataSampler):
             res = self._indexes2XY(sampledSteps, kwargs)
         return res, rejected, accepted
 
-    @lru_cache(None)
-    def _targetFor(self, ind):
-        mainPt = self._storage[ind]['goal']
-        keypoints = np.array(mainPt, np.float32)
-        return keypoints
-
     def _indexes2XY(self, indexesAndTime, kwargs):
         timesteps = kwargs.get('timesteps', None)
+        assert timesteps is not None, 'The number of timesteps must be defined.'
         samples = [self._storage[i] for i, _ in indexesAndTime]
-
-        Y = ( np.array([ self._targetFor(i)  for i, _ in indexesAndTime], np.float32), )
-        Y = self._reshapeSteps(Y, timesteps)
         ##############
         userIds = np.unique([x['userId'] for x in samples])
         assert 1 == len(userIds), 'Only one user is supported. Found: ' + str(userIds)
@@ -132,21 +130,85 @@ class CDataSampler(CBaseDataSampler):
             ),
             userIds[0], placeIds[0], screenIds[0]
         )
+        X = X['clean']
         ###############
-        (Y, ) = Y
-        return (X, (Y.astype(np.float32), ))
+        # generate the target data
+        targets = kwargs.get('targets', {'keypoints': timesteps, 'total': timesteps})
+        K = targets.get('keypoints', timesteps)
+        assert K <= timesteps, 'The number of keypoints to be inpainted/reconstructed must be less or equal to the number of timesteps.'
+        T = targets.get('total', timesteps)
+        assert K <= T, 'The total number of frames to be inpainted/reconstructed must be less or equal to the total number of timesteps.'
 
+        samples_indexes = np.array([ i  for i, _ in indexesAndTime], np.int32)
+        samples_indexes = samples_indexes.reshape((-1, timesteps))
+        B = samples_indexes.shape[0]
+        targetsIdx = np.zeros((B, T), np.int32)
+        for i in range(B):
+            # sample K frames from the X
+            sampled = np.random.choice(samples_indexes[i], K, replace=False)
+            # repeat the sampled frames to fill the K frames
+            targetsIdx[i, :] = np.repeat(sampled, 1 + (T // K))[:T]
+            # sample the remaining frames
+            if K < T: # if need to sample more frames
+                startFrameIdx = samples_indexes[i, 0]
+                endFrameIdx = samples_indexes[i, -1]
+                allFrames = np.arange(startFrameIdx, endFrameIdx + 1)
+                # exclude the frames that are already sampled
+                allFrames = np.array([x for x in allFrames if x not in sampled], np.int32)
+                # sample the remaining frames
+                targetsIdx[i, K:] = np.random.choice(allFrames, T - K, replace=True)
+            continue
+        # targetsIdx contains the indexes of the frames to be inpainted/reconstructed
+        # we need to collect the data for the Y
+        # required data: points, left eye, right eye, time, target point
+        Y = {
+            'points': np.zeros((B, T, FACE_MESH_POINTS, 2), np.float32),
+            'left eye': np.zeros((B, T, 32, 32), np.float32),
+            'right eye': np.zeros((B, T, 32, 32), np.float32),
+            'time': np.zeros((B, T, 1), np.float32),
+            'target': np.zeros((B, T, 2), np.float32)
+        }
+        for i in range(B):
+            idxForSample = samples_indexes[i]
+            # stricly increasing indexes
+            assert np.all(0 < np.diff(idxForSample)), 'Invalid indexes: ' + str(idxForSample)
+            startT = self._storage[idxForSample[0]]['time']
+            endT = self._storage[idxForSample[-1]]['time']
+            duration = endT - startT
+            assert 0 < duration, 'Invalid duration: ' + str(duration)
+            targets_idx = np.sort(targetsIdx[i])
+            for j, idx in enumerate(targets_idx):
+                data = self._storage[idx]
+                Y['points'][i, j] = data['points']
+                # eyes should be cropped to 32x32, so we use the central crop
+                p = (data['left eye'].shape[0] - 32) // 2
+                Y['left eye'][i, j] = data['left eye'][p:p+32, p:p+32]
+                Y['right eye'][i, j] = data['right eye'][p:p+32, p:p+32]
+                Y['time'][i, j] = (data['time'] - startT) / duration
+                Y['target'][i, j] = data['goal']
+                
+        # check that time is between 0 and 1
+        assert np.all((0 <= Y['time']) & (Y['time'] <= 1)), 'Invalid time: ' + str(Y['time'])
+        B = Y['points'].shape[0] 
+        for k, v in X.items():
+            assert B == v.shape[0], f'Invalid batch size for X[{k}]: {v.shape[0]} != {B} ({v.shape})'
+        for k, v in Y.items():
+            assert B == v.shape[0], f'Invalid batch size for Y[{k}]: {v.shape[0]} != {B} ({v.shape})'
+        return (X, Y)
+    
     def merge(self, samples, expected_batch_size):
-        Y = np.concatenate([Y for _, (Y, ) in samples], axis=0)
-        assert len(Y) == expected_batch_size, 'Invalid batch size: %d != %d' % (len(Y), expected_batch_size)
-        # X contains the clean and augmented data
         # each dictionary contains the subkeys: points, left eye, right eye, time, userId, placeId, screenId
         X = {}
-        for key in ['clean', 'augmented']:
-            for subkey in ['points', 'left eye', 'right eye', 'time', 'userId', 'placeId', 'screenId']:
-                data = [x[key][subkey] for x, _ in samples]
-                X[key][subkey] = np.concatenate(data, axis=0)
-                assert X[key][subkey].shape[0] == expected_batch_size, 'Invalid batch size: %d != %d' % (X[key][subkey].shape[0], expected_batch_size)
-                continue
+        for subkey in ['points', 'left eye', 'right eye', 'time', 'userId', 'placeId', 'screenId']:
+            data = [x[subkey] for x, _ in samples]
+            X[subkey] = np.concatenate(data, axis=0)
+            assert X[subkey].shape[0] == expected_batch_size, 'Invalid batch size: %d != %d' % (X[subkey].shape[0], expected_batch_size)
+            continue
+        # 
+        Y = {}
+        for subkey in ['points', 'left eye', 'right eye', 'time', 'target']:
+            data = [y[subkey] for _, y in samples]
+            Y[subkey] = np.concatenate(data, axis=0)
+            assert Y[subkey].shape[0] == expected_batch_size, 'Invalid batch size: %d != %d' % (Y[subkey].shape[0], expected_batch_size)
             continue
         return (X, (Y, ))

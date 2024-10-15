@@ -7,8 +7,8 @@ ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
 sys.path.append(ROOT_FOLDER)
 
 import numpy as np
+from Core.CDataSamplerInpainting import CDataSamplerInpainting
 from Core.CDatasetLoader import CDatasetLoader
-from Core.CDataSampler import CDataSampler
 from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
@@ -18,33 +18,7 @@ import tqdm
 import json
 import glob
 
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-def unbatch(qu):
-  qu = np.array(qu)
-  qu = qu.transpose(1, 0, *np.arange(2, len(qu.shape)))
-  return qu.reshape((qu.shape[0], -1, qu.shape[-1]))
-
-def plotPrediction(Y, predV, filename):
-  plt.figure(figsize=(8, 8))
-  plt.plot(Y[:, 0], Y[:, 1], 'o', markersize=1)
-  plt.plot(predV[:, 0], predV[:, 1], 'o', markersize=1)
-  for i in range(5):
-    d = i * 0.1
-    plt.gca().add_patch(
-      patches.Rectangle(
-        (d,d), 1-2*d, 1-2*d,
-        linewidth=1,edgecolor='r',facecolor='none'
-      )
-    )
-
-  plt.savefig(filename)
-  plt.clf()
-  plt.close()
-  return
-
-def _eval(dataset, model, plotFilename, args):
+def _eval(dataset, model):
   T = time.time()
   # evaluate the model on the val dataset
   lossPerSample = {'loss': [], 'pos': []}
@@ -63,11 +37,6 @@ def _eval(dataset, model, plotFilename, args):
       continue
     continue
 
-  if args.debug: # plot the predictions and the ground truth
-    Y = unbatch(Y).reshape((-1, 2))
-    predV = unbatch(predV).reshape((-1, 2))
-    plotPrediction(Y, predV, plotFilename)
-  
   loss = np.mean(lossPerSample['loss'])
   dist = np.mean(predDist)
   T = time.time() - T
@@ -81,7 +50,7 @@ def evaluator(datasets, model, folder, args):
     totalDist = []
     losses_dist = []
     for i, dataset in enumerate(datasets):
-      loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
+      loss, dist, T = _eval(dataset, model)
       losses_dist.append((loss, losses[i], dist, dists[i]))
       isImproved = loss < losses[i]
       if (not onlyImproved) or isImproved:
@@ -108,15 +77,23 @@ def evaluator(datasets, model, folder, args):
   return evaluate
 
 def _modelTrainingLoop(model, dataset):
-  def F(desc, sampleParams):
+  def F(desc):
     history = defaultdict(list)
     # use the tqdm progress bar
     with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
-        sampled = dataset.sample(**sampleParams)
+        sampled = dataset.sample()
         assert 2 == len(sampled), 'The dataset should return a tuple with the input and the output'
         X, Y = sampled
+        # print shapes of the sampled data
+        for k, v in X.items():
+          print('X', k, v.shape)
+          continue
+        for k, v in Y.items():
+          print('Y', k, v.shape)
+          continue
+        exit(0)
         assert 'clean' in X, 'The input should contain the clean data'
         assert 'augmented' in X, 'The input should contain the augmented data'
         for nm in ['clean', 'augmented']:
@@ -141,54 +118,8 @@ def _modelTrainingLoop(model, dataset):
     return
   return F
 
-def _defaultSchedule(args):
-  return lambda epoch: dict()
-
-def _schedule_from_json(args):
-  with open(args.schedule, 'r') as f:
-    schedule = json.load(f)
-
-  # schedule is a dictionary of dictionaries, where the keys are the epochs
-  # transform it into a sorted list of tuples (epoch, params)
-  for k, v in schedule.items():
-    v = [(int(epoch), p) for epoch, p in v.items()]
-    schedule[k] = sorted(v, key=lambda x: x[0])
-    continue
-
-  def F(epoch):
-    res = {}
-    for k, v in schedule.items():
-      assert isinstance(v, list), 'The schedule should be a list of parameters'
-      # find the first epoch that is less or equal to the current one
-      smallest = [i for i, (e, _) in enumerate(v) if e <= epoch]
-      if 0 == len(smallest): continue
-      smallest = smallest[-1]
-
-      startEpoch, p = v[smallest]
-      value = p
-      # p could be a dictionary or value
-      if isinstance(p, list) and (2 == len(p)):
-        assert smallest + 1 < len(v), 'The last epoch should be the last one'
-        minV, maxV = [float(x) for x in p]
-        nextEpoch, _ = v[smallest + 1]
-        # linearly interpolate between the values
-        value = minV + (maxV - minV) * (epoch - startEpoch) / (nextEpoch - startEpoch)
-        pass
-      
-      res[k] = float(value)
-      continue
-
-    if args.debug and res:
-      print('Parameters for epoch %d:' % (epoch, ))
-      for k, v in res.items():
-        print('  %s: %.5f' % (k, v))
-        continue
-    return res
-  return F
-
 def _trainer_from(args):
   if args.trainer == 'default': return CModelTrainer
-  if args.trainer == 'diffusion': return CModelDiffusion
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def averageModels(folder, model, noiseStd=0.0):
@@ -216,10 +147,6 @@ def averageModels(folder, model, noiseStd=0.0):
 def main(args):
   timesteps = args.steps
   folder = os.path.join(args.folder, 'Data')
-  if args.schedule is None:
-    getSampleParams = _defaultSchedule(args)
-  else:
-    getSampleParams = _schedule_from_json(args)
 
   stats = None
   with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
@@ -241,8 +168,12 @@ def main(args):
         pointsNoise=0.01, pointsDropout=0.0,
         eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
       ),
+      targets=dict(
+        keypoints=3,
+        total=10
+      ),
     ),
-    sampler_class=CDataSampler
+    sampler_class=CDataSamplerInpainting,
   )
   model = dict(timesteps=timesteps, stats=stats, use_encoders=args.with_enconders)
   if args.model is not None:
@@ -255,8 +186,8 @@ def main(args):
 
   # find folders with the name "/test-*/"
   evalDatasets = [
-    CTestLoader(nm)
-    for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
+    # CTestLoader(nm)
+    # for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
   ]
   eval = evaluator(evalDatasets, model, folder, args)
   bestLoss, _ = eval() # evaluate loaded model
@@ -280,27 +211,10 @@ def main(args):
     return f
   
   eval = evalWrapper(eval)
-
-  def performRandomSearch(epoch=0):
-    nonlocal bestLoss, bestEpoch
-    averageModels(folder, model, noiseStd=0.0)
-    eval(epoch=epoch, onlyImproved=True) # evaluate the averaged model
-    for _ in range(args.restarts):
-      # and add some noise
-      averageModels(folder, model, noiseStd=args.noise)
-      # re-evaluate the model with the new weights
-      eval(epoch=epoch, onlyImproved=True)
-      continue
-    return
-  
-  if args.average:
-    performRandomSearch()
-
   trainStep = _modelTrainingLoop(model, trainDataset)
   for epoch in range(args.epochs):
     trainStep(
       desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
-      sampleParams=getSampleParams(epoch)
     )
     model.save(folder, postfix='latest')
     eval(epoch)
@@ -310,10 +224,6 @@ def main(args):
       if 'stop' == args.on_patience:
         print('Early stopping')
         break
-      if 'reset' == args.on_patience:
-        print('Resetting the model to the average of the best models')
-        bestEpoch = epoch # reset the patience
-        performRandomSearch(epoch=epoch)
     continue
   return
 

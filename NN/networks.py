@@ -1,9 +1,4 @@
-import argparse, os, sys
-# add the root folder of the project to the path
-ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
-sys.path.append(ROOT_FOLDER)
-
-from Core.Utils import setupGPU
+from Core.Utils import setupGPU, FACE_MESH_POINTS
 setupGPU() # dirty hack to setup GPU memory limit on startup
 
 import tensorflow as tf
@@ -141,7 +136,7 @@ def Step2LatentModel(latentSize, embeddingsSize):
 
 def _InputSpec():
   return {
-    'points': tf.TensorSpec(shape=(None, None, 478, 2), dtype=tf.float32),
+    'points': tf.TensorSpec(shape=(None, None, FACE_MESH_POINTS, 2), dtype=tf.float32),
     'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
     'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
     'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
@@ -151,7 +146,7 @@ def _InputSpec():
   }
 
 def Face2LatentModel(
-  pointsN=478, eyeSize=32, steps=None, latentSize=64,
+  pointsN=FACE_MESH_POINTS, eyeSize=32, steps=None, latentSize=64,
   embeddings=None,
   diffusion=False # whether to use diffusion model
 ):
@@ -225,7 +220,20 @@ def Face2LatentModel(
   }
   
 ##########################
-def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=478, eyeSize=32, KP=5):
+
+def _InpaintingInputSpec():
+  return {
+    'points': tf.TensorSpec(shape=(None, None, FACE_MESH_POINTS, 2), dtype=tf.float32),
+    'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
+    'userId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
+    'placeId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
+    'screenId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
+    'target': tf.TensorSpec(shape=(None, None, 2), dtype=tf.float32),
+  }
+
+def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
   eyeR = L.Input((steps, eyeSize, eyeSize, 1))
@@ -304,7 +312,7 @@ def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=478, eyeSize
   )
   return main
  
-def InpaintingDecoderModel(latentSize, embeddings, pointsN=478, eyeSize=32, KP=5):
+def InpaintingDecoderModel(latentSize, embeddings, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
   latentKeyPoints = L.Input((KP, latentSize))
   T = L.Input((None, 1))
   userIdEmb = L.Input((embeddings['size']))
@@ -329,7 +337,7 @@ def InpaintingDecoderModel(latentSize, embeddings, pointsN=478, eyeSize=32, KP=5
   latents = L.Lambda(transformLatents, name='CombineEmb')([latents, emb])
   # process the latents
   latents = sMLP(sizes=[latentSize] * 3, activation='relu', name='CombineEmb/MLP')(latents)
-  # decode the latents to the face points (478, 2), two eyes (32, 32, 2) and the target (2) 
+  # decode the latents to the face points (FACE_MESH_POINTS, 2), two eyes (32, 32, 2) and the target (2) 
   target = IntermediatePredictor(shift=0.5)(latents)
   # two eyes
   eyesN = eyeSize * eyeSize

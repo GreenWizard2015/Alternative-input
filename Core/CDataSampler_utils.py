@@ -109,7 +109,7 @@ def toTensor(data, params, userId, placeId, screenId):
   ##########################
   # random crop 32x32 eyes
   fraction = 32.0 / 48.0
-  pos = tf.random.uniform((N, 2), minval=0.0, maxval=1.0 - fraction)
+  pos = tf.random.uniform((N, 2), minval=0.0, maxval=2.0 * fraction)
   boxes = tf.concat([pos, pos + fraction], axis=-1)
   tf.assert_equal(tf.shape(boxes), (N, 4))
   imgA = tf.image.crop_and_resize(
