@@ -13,7 +13,6 @@ from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
 from Core.CModelTrainer import CModelTrainer
-from Core.CModelDiffusion import CModelDiffusion
 import tqdm
 import json
 import glob
