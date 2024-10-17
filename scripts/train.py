@@ -107,13 +107,13 @@ def evaluator(datasets, model, folder, args):
   return evaluate
 
 def _modelTrainingLoop(model, dataset):
-  def F(desc, sampleParams):
+  def F(desc):
     history = defaultdict(list)
     # use the tqdm progress bar
     with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
-        sampled = dataset.sample(**sampleParams)
+        sampled = dataset.sample()
         assert 2 == len(sampled), 'The dataset should return a tuple with the input and the output'
         X, Y = sampled
         assert 'clean' in X, 'The input should contain the clean data'
@@ -138,51 +138,6 @@ def _modelTrainingLoop(model, dataset):
         continue
       dataset.on_epoch_end()
     return
-  return F
-
-def _defaultSchedule(args):
-  return lambda epoch: dict()
-
-def _schedule_from_json(args):
-  with open(args.schedule, 'r') as f:
-    schedule = json.load(f)
-
-  # schedule is a dictionary of dictionaries, where the keys are the epochs
-  # transform it into a sorted list of tuples (epoch, params)
-  for k, v in schedule.items():
-    v = [(int(epoch), p) for epoch, p in v.items()]
-    schedule[k] = sorted(v, key=lambda x: x[0])
-    continue
-
-  def F(epoch):
-    res = {}
-    for k, v in schedule.items():
-      assert isinstance(v, list), 'The schedule should be a list of parameters'
-      # find the first epoch that is less or equal to the current one
-      smallest = [i for i, (e, _) in enumerate(v) if e <= epoch]
-      if 0 == len(smallest): continue
-      smallest = smallest[-1]
-
-      startEpoch, p = v[smallest]
-      value = p
-      # p could be a dictionary or value
-      if isinstance(p, list) and (2 == len(p)):
-        assert smallest + 1 < len(v), 'The last epoch should be the last one'
-        minV, maxV = [float(x) for x in p]
-        nextEpoch, _ = v[smallest + 1]
-        # linearly interpolate between the values
-        value = minV + (maxV - minV) * (epoch - startEpoch) / (nextEpoch - startEpoch)
-        pass
-      
-      res[k] = float(value)
-      continue
-
-    if args.debug and res:
-      print('Parameters for epoch %d:' % (epoch, ))
-      for k, v in res.items():
-        print('  %s: %.5f' % (k, v))
-        continue
-    return res
   return F
 
 def _trainer_from(args):
@@ -214,11 +169,6 @@ def averageModels(folder, model, noiseStd=0.0):
 def main(args):
   timesteps = args.steps
   folder = os.path.join(args.folder, 'Data')
-  if args.schedule is None:
-    getSampleParams = _defaultSchedule(args)
-  else:
-    getSampleParams = _schedule_from_json(args)
-
   stats = None
   with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
     stats = json.load(f)
@@ -242,7 +192,7 @@ def main(args):
     ),
     sampler_class=CDataSampler
   )
-  model = dict(timesteps=timesteps, stats=stats, use_encoders=args.with_enconders)
+  model = dict(timesteps=timesteps, stats=stats)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model, embeddings=args.embeddings)
   if args.modelId is not None:
@@ -298,7 +248,6 @@ def main(args):
   for epoch in range(args.epochs):
     trainStep(
       desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
-      sampleParams=getSampleParams(epoch)
     )
     model.save(folder, postfix='latest')
     eval(epoch)
@@ -343,9 +292,6 @@ if __name__ == '__main__':
   parser.add_argument(
     '--restarts', type=int, default=1,
     help='Number of times to restart the model reinitializing the weights'
-  )
-  parser.add_argument(
-    '--with-enconders', default=False, action='store_true',
   )
   parser.add_argument(
     '--sampling', type=str, default='uniform',

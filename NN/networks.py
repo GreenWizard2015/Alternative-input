@@ -221,8 +221,8 @@ def Face2LatentModel(
   
 ##########################
 
-def _InpaintingInputSpec():
-  return {
+def InpaintingInputSpec():
+  XSpec = {
     'points': tf.TensorSpec(shape=(None, None, FACE_MESH_POINTS, 2), dtype=tf.float32),
     'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
     'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
@@ -232,16 +232,25 @@ def _InpaintingInputSpec():
     'screenId': tf.TensorSpec(shape=(None, None, 1), dtype=tf.int32),
     'target': tf.TensorSpec(shape=(None, None, 2), dtype=tf.float32),
   }
+  YSpec = {
+    'points': tf.TensorSpec(shape=(None, None, FACE_MESH_POINTS, 2), dtype=tf.float32),
+    'left eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'right eye': tf.TensorSpec(shape=(None, None, 32, 32), dtype=tf.float32),
+    'time': tf.TensorSpec(shape=(None, None, 1), dtype=tf.float32),
+    'target': tf.TensorSpec(shape=(None, None, 2), dtype=tf.float32),
+  }
+  return (XSpec, YSpec)
 
-def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
+
+def InpaintingEncoderModel(latentSize, embeddingsSize, steps=5, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
   points = L.Input((steps, pointsN, 2))
   eyeL = L.Input((steps, eyeSize, eyeSize, 1))
   eyeR = L.Input((steps, eyeSize, eyeSize, 1))
   T = L.Input((steps, 1)) # accumulative time
   target = L.Input((steps, 2))
-  userIdEmb = L.Input((steps, embeddings['size']))
-  placeIdEmb = L.Input((steps, embeddings['size']))
-  screenIdEmb = L.Input((steps, embeddings['size']))
+  userIdEmb = L.Input((steps, embeddingsSize))
+  placeIdEmb = L.Input((steps, embeddingsSize))
+  screenIdEmb = L.Input((steps, embeddingsSize))
 
   emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])
 
@@ -312,14 +321,14 @@ def InpaintingEncoderModel(latentSize, embeddings, steps=5, pointsN=FACE_MESH_PO
   )
   return main
  
-def InpaintingDecoderModel(latentSize, embeddings, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
+def InpaintingDecoderModel(latentSize, embeddingsSize, pointsN=FACE_MESH_POINTS, eyeSize=32, KP=5):
   latentKeyPoints = L.Input((KP, latentSize))
   T = L.Input((None, 1))
-  userIdEmb = L.Input((embeddings['size']))
-  placeIdEmb = L.Input((embeddings['size']))
-  screenIdEmb = L.Input((embeddings['size']))
+  userIdEmb = L.Input((None, embeddingsSize))
+  placeIdEmb = L.Input((None, embeddingsSize))
+  screenIdEmb = L.Input((None, embeddingsSize))
 
-  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])[..., None, :]
+  emb = L.Concatenate(-1)([userIdEmb, placeIdEmb, screenIdEmb])[:, :1, :]
   # emb shape: (B, 1, 3 * embSize) 
   def interpolateKeys(x):
     latents, T = x
@@ -332,7 +341,7 @@ def InpaintingDecoderModel(latentSize, embeddings, pointsN=FACE_MESH_POINTS, eye
   def transformLatents(x):
     latents, emb = x
     N = tf.shape(latents)[1]
-    emb = tf.tile(emb, (1, N, 1)) # (B, 1, 3 * embSize) -> (B, N, 3 * embSize)
+    emb = tf.tile(emb, (1, N, 1))
     return L.Concatenate(-1)([latents, emb])
   latents = L.Lambda(transformLatents, name='CombineEmb')([latents, emb])
   # process the latents
@@ -359,9 +368,9 @@ def InpaintingDecoderModel(latentSize, embeddings, pointsN=FACE_MESH_POINTS, eye
     },
     outputs={
       'target': target,
-      'left eye': eyes[:, :, 0],
-      'right eye': eyes[:, :, 1],
-      'face': face,
+      'left eye': eyes[..., 0],
+      'right eye': eyes[..., 1],
+      'points': face,
     }
   )
   return model

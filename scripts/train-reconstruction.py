@@ -12,7 +12,7 @@ from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestLoader import CTestLoader
 from collections import defaultdict
 import time
-from Core.CModelTrainer import CModelTrainer
+from Core.CInpaintingTrainer import CInpaintingTrainer
 import tqdm
 import json
 import glob
@@ -83,28 +83,6 @@ def _modelTrainingLoop(model, dataset):
       dataset.on_epoch_start()
       for _ in range(len(dataset)):
         sampled = dataset.sample()
-        assert 2 == len(sampled), 'The dataset should return a tuple with the input and the output'
-        X, Y = sampled
-        # print shapes of the sampled data
-        for k, v in X.items():
-          print('X', k, v.shape)
-          continue
-        for k, v in Y.items():
-          print('Y', k, v.shape)
-          continue
-        exit(0)
-        assert 'clean' in X, 'The input should contain the clean data'
-        assert 'augmented' in X, 'The input should contain the augmented data'
-        for nm in ['clean', 'augmented']:
-          item = X[nm]
-          assert 'points' in item, 'The input should contain the points'
-          assert 'left eye' in item, 'The input should contain the left eye'
-          assert 'right eye' in item, 'The input should contain the right eye'
-          assert 'time' in item, 'The input should contain the time'
-          assert 'userId' in item, 'The input should contain the userId'
-          assert 'placeId' in item, 'The input should contain the placeId'
-          assert 'screenId' in item, 'The input should contain the screenId'
-          continue
         stats = model.fit(sampled)
         history['time'].append(stats['time'])
         for k in stats['losses'].keys():
@@ -118,7 +96,7 @@ def _modelTrainingLoop(model, dataset):
   return F
 
 def _trainer_from(args):
-  if args.trainer == 'default': return CModelTrainer
+  if args.trainer == 'default': return CInpaintingTrainer
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
 def averageModels(folder, model, noiseStd=0.0):
@@ -166,22 +144,20 @@ def main(args):
         # no augmentations by default
         pointsNoise=0.01, pointsDropout=0.0,
         eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
+        targets=dict(keypoints=3, total=10),
       ),
-      targets=dict(
-        keypoints=3,
-        total=10
-      ),
+      keys=['clean', 'augmented'],
     ),
     sampler_class=CDataSamplerInpainting,
   )
-  model = dict(timesteps=timesteps, stats=stats, use_encoders=args.with_enconders)
+  model = dict(timesteps=timesteps, stats=stats)
   if args.model is not None:
     model['weights'] = dict(folder=folder, postfix=args.model, embeddings=args.embeddings)
   if args.modelId is not None:
     model['model'] = args.modelId
 
   model = trainer(**model)
-  model._model.summary()
+#   model._model.summary()
 
   # find folders with the name "/test-*/"
   evalDatasets = [
@@ -194,6 +170,7 @@ def main(args):
   # wrapper for the evaluation function. It saves the model if it is better
   def evalWrapper(eval):
     def f(epoch, onlyImproved=False):
+      return
       nonlocal bestLoss, bestEpoch
       newLoss, losses = eval(onlyImproved=onlyImproved)
       if newLoss < bestLoss:
@@ -215,7 +192,7 @@ def main(args):
     trainStep(
       desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
     )
-    model.save(folder, postfix='latest')
+    # model.save(folder, postfix='latest')
     eval(epoch)
 
     print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
@@ -243,20 +220,13 @@ if __name__ == '__main__':
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
     '--trainer', type=str, default='default',
-    choices=['default', 'diffusion']
-  )
-  parser.add_argument(
-    '--schedule', type=str, default=None,
-    help='JSON file with the scheduler parameters for sampling the training dataset'
+    choices=['default']
   )
   parser.add_argument('--debug', action='store_true')
   parser.add_argument('--noise', type=float, default=1e-4)
   parser.add_argument(
     '--restarts', type=int, default=1,
     help='Number of times to restart the model reinitializing the weights'
-  )
-  parser.add_argument(
-    '--with-enconders', default=False, action='store_true',
   )
   parser.add_argument(
     '--sampling', type=str, default='uniform',

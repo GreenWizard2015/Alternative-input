@@ -13,11 +13,10 @@ def lagrange_interpolation(x_values, y_values, x_targets):
     Returns:
     - interpolated_values: Tensor of shape (batch_size, m, d), interpolated y-values for each batch.
     """
-    minX = tf.reduce_min(x_values, axis=1)
-    maxX = tf.reduce_max(x_values, axis=1)
-    # Check if x_targets in the range of x_values
-    tf.debugging.assert_greater_equal(x_targets, minX, message="x_targets out of range")
-    tf.debugging.assert_less_equal(x_targets, maxX, message="x_targets out of range")
+    # add extra points at -1 and 2, to smooth the interpolation at the edges
+    ones = tf.ones_like(x_values[:, :1])
+    x_values = tf.concat([ones * -1, x_values, ones * 2], axis=1)
+    y_values = tf.concat([y_values[:, :1], y_values, y_values[:, -1:]], axis=1)
 
     batch_size = tf.shape(x_values)[0]
     n = tf.shape(x_values)[1]

@@ -3,6 +3,7 @@ import Core.CDataSampler_utils as DSUtils
 from Core.Utils import FACE_MESH_POINTS
 
 import numpy as np
+import tensorflow as tf
 
 '''
 This sampler are sample N frames from the dataset, where N is the number of timesteps.
@@ -24,8 +25,9 @@ Y contains the target data, K frames to be inpainted/reconstructed.
   - The target point.
 '''
 class CDataSamplerInpainting(CBaseDataSampler):
-    def __init__(self, storage, batch_size, minFrames, defaults={}, maxT=1.0, cumulative_time=True):
+    def __init__(self, storage, batch_size, minFrames, keys, defaults={}, maxT=1.0, cumulative_time=True):
         super().__init__(storage, batch_size, minFrames, defaults, maxT, cumulative_time)
+        self._keys = keys
 
     def _stepsFor(self, mainInd, steps, stepsSampling='uniform', **_):
         if (steps is None) or (1 == steps): return [(mainInd, 0.0)]
@@ -46,7 +48,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
     def sample(self, **kwargs):
         kwargs = {**self._defaults, **kwargs}
         timesteps = kwargs.get('timesteps', None)
-        N = kwargs.get('N', self._batchSize)
+        N = kwargs.get('N', self._batchSize) // len(self._keys)
         indexes = []
         for _ in range(N):
             added = False
@@ -101,6 +103,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
     def _indexes2XY(self, indexesAndTime, kwargs):
         timesteps = kwargs.get('timesteps', None)
         assert timesteps is not None, 'The number of timesteps must be defined.'
+        B = len(indexesAndTime) // timesteps
         samples = [self._storage[i] for i, _ in indexesAndTime]
         ##############
         userIds = np.unique([x['userId'] for x in samples])
@@ -130,7 +133,25 @@ class CDataSamplerInpainting(CBaseDataSampler):
             ),
             userIds[0], placeIds[0], screenIds[0]
         )
-        X = X['clean']
+        for k in X.keys():
+            # add the target point to the X
+            targets = np.array([x['goal'] for x in samples], np.float32).reshape((B, timesteps, 2))
+            X[k]['target'] = tf.constant(targets, dtype=tf.float32)
+
+        if 1 == len(self._keys):
+            X = X[self._keys[0]]
+        else:
+            res = {}
+            k = self._keys[0]
+            subkeys = list(X[k].keys())
+            for k in subkeys:
+                values = [X[key][k] for key in self._keys]
+                res[k] = tf.concat(values, axis=0)
+                continue
+            X = res
+            indexesAndTime = indexesAndTime * len(self._keys)
+            B = len(self._keys) * B
+
         ###############
         # generate the target data
         targets = kwargs.get('targets', {'keypoints': timesteps, 'total': timesteps})
@@ -141,7 +162,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
 
         samples_indexes = np.array([ i  for i, _ in indexesAndTime], np.int32)
         samples_indexes = samples_indexes.reshape((-1, timesteps))
-        B = samples_indexes.shape[0]
+        assert samples_indexes.shape[0] == B, 'Invalid number of samples: %d != %d' % (samples_indexes.shape[0], B)
         targetsIdx = np.zeros((B, T), np.int32)
         for i in range(B):
             # sample K frames from the X
@@ -186,10 +207,11 @@ class CDataSamplerInpainting(CBaseDataSampler):
                 Y['right eye'][i, j] = data['right eye'][p:p+32, p:p+32]
                 Y['time'][i, j] = (data['time'] - startT) / duration
                 Y['target'][i, j] = data['goal']
-                
+        # eyes in 0..255, so we need to normalize them
+        Y['left eye'] /= 255.0
+        Y['right eye'] /= 255.0
         # check that time is between 0 and 1
         assert np.all((0 <= Y['time']) & (Y['time'] <= 1)), 'Invalid time: ' + str(Y['time'])
-        B = Y['points'].shape[0] 
         for k, v in X.items():
             assert B == v.shape[0], f'Invalid batch size for X[{k}]: {v.shape[0]} != {B} ({v.shape})'
         for k, v in Y.items():
@@ -197,9 +219,8 @@ class CDataSamplerInpainting(CBaseDataSampler):
         return (X, Y)
     
     def merge(self, samples, expected_batch_size):
-        # each dictionary contains the subkeys: points, left eye, right eye, time, userId, placeId, screenId
         X = {}
-        for subkey in ['points', 'left eye', 'right eye', 'time', 'userId', 'placeId', 'screenId']:
+        for subkey in ['points', 'left eye', 'right eye', 'time', 'userId', 'placeId', 'screenId', 'target']:
             data = [x[subkey] for x, _ in samples]
             X[subkey] = np.concatenate(data, axis=0)
             assert X[subkey].shape[0] == expected_batch_size, 'Invalid batch size: %d != %d' % (X[subkey].shape[0], expected_batch_size)
@@ -211,4 +232,4 @@ class CDataSamplerInpainting(CBaseDataSampler):
             Y[subkey] = np.concatenate(data, axis=0)
             assert Y[subkey].shape[0] == expected_batch_size, 'Invalid batch size: %d != %d' % (Y[subkey].shape[0], expected_batch_size)
             continue
-        return (X, (Y, ))
+        return (X, Y)

@@ -8,7 +8,7 @@ Data
     PlaceId
       UserId
         ScreenId
-          start_time.npz
+          *.npz
 '''
 import argparse, os, sys
 # add the root folder of the project to the path
@@ -68,7 +68,12 @@ def deserialize(buffer):
     # Read points (float32)
     sample['points'] = np.frombuffer(buffer, dtype='>f4', count=2*FACE_MESH_POINTS, offset=offset) \
       .reshape(FACE_MESH_POINTS, 2)
-    assert np.all(-2 <= sample['points']) and np.all(sample['points'] <= 2), 'Invalid points'
+    # change the range [-d, 1.0 + d]
+    d = 0.5
+    points = sample['points']
+    is_valid = (-d <= points) & (points <= 1.0 + d)
+    is_valid = is_valid.all(axis=-1)
+    assert np.all(is_valid), 'Invalid points: %s' % points[~is_valid]
     offset += 4 * 2 * FACE_MESH_POINTS
     
     # Read goal (float32)
