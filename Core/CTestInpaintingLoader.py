@@ -3,7 +3,7 @@ import numpy as np
 import os, glob
 from functools import lru_cache
 
-class CTestLoader(tf.keras.utils.Sequence):
+class CTestInpaintingLoader(tf.keras.utils.Sequence):
   def __init__(self, testFolder):
     self._batchesNpz = [
       f for f in glob.glob(os.path.join(testFolder, 'test-*.npz'))
@@ -21,5 +21,6 @@ class CTestLoader(tf.keras.utils.Sequence):
     with np.load(self._batchesNpz[idx]) as res:
       res = {k: v for k, v in res.items()}
       
-    Y = res.pop('y')
-    return(res, (Y, ))
+    X = {k.replace('X_', ''): v for k, v in res.items() if 'X_' in k}
+    Y = {k.replace('Y_', ''): v for k, v in res.items() if 'Y_' in k}
+    return(X, Y)

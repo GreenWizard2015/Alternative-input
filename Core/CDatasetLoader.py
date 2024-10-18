@@ -43,6 +43,8 @@ class CDatasetLoader:
       i: len(ds.validSamples())
       for i, ds in enumerate(self._datasets)
     }
+    # ignore datasets with no valid samples
+    validSamples = {k: v for k, v in validSamples.items() if 0 < v}
     dtype = np.uint8 if len(self._datasets) < 256 else np.uint32
     # create an array of dataset indices to sample from
     sampling = ESampling(sampling)
@@ -101,13 +103,15 @@ class CDatasetLoader:
     samples = []
     totalSamples = 0
     # find the datasets ids and the number of samples to take from each dataset
-    datasetIds, counts = self._getBatchStats(batchSize)
-    for datasetId, N in zip(datasetIds, counts):
-      dataset = self._datasets[datasetId]
-      sampled = dataset.sample(N=N, **kwargs)
-      samples.append(sampled)
-      totalSamples += N
-      continue
+    while totalSamples < batchSize:
+      datasetIds, counts = self._getBatchStats(batchSize - totalSamples)
+      for datasetId, N in zip(datasetIds, counts):
+        dataset = self._datasets[datasetId]
+        sampled, N = dataset.sample(N=N, **kwargs)
+        if 0 < N:
+          samples.append(sampled)
+        totalSamples += N
+        continue
     
     first_dataset = self._datasets[0]
     return first_dataset.merge(samples, batchSize)

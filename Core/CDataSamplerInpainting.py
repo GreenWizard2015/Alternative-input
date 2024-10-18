@@ -50,6 +50,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
         timesteps = kwargs.get('timesteps', None)
         N = kwargs.get('N', self._batchSize) // len(self._keys)
         indexes = []
+        added = False
         for _ in range(N):
             added = False
             while not added:
@@ -62,7 +63,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
                     indexes.extend(sampledSteps)
                     added = True
                 continue
-
+        if not added: return None, 0
         return self._indexes2XY(indexes, kwargs)
 
     def sampleById(self, idx, **kwargs):
@@ -97,7 +98,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
 
         res = None
         if 0 < len(sampledSteps):
-            res = self._indexes2XY(sampledSteps, kwargs)
+            res, _ = self._indexes2XY(sampledSteps, kwargs)
         return res, rejected, accepted
 
     def _indexes2XY(self, indexesAndTime, kwargs):
@@ -216,7 +217,7 @@ class CDataSamplerInpainting(CBaseDataSampler):
             assert B == v.shape[0], f'Invalid batch size for X[{k}]: {v.shape[0]} != {B} ({v.shape})'
         for k, v in Y.items():
             assert B == v.shape[0], f'Invalid batch size for Y[{k}]: {v.shape[0]} != {B} ({v.shape})'
-        return (X, Y)
+        return (X, Y), B
     
     def merge(self, samples, expected_batch_size):
         X = {}

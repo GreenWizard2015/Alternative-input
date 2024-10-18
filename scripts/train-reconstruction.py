@@ -9,7 +9,7 @@ sys.path.append(ROOT_FOLDER)
 import numpy as np
 from Core.CDataSamplerInpainting import CDataSamplerInpainting
 from Core.CDatasetLoader import CDatasetLoader
-from Core.CTestLoader import CTestLoader
+from Core.CTestInpaintingLoader import CTestInpaintingLoader
 from collections import defaultdict
 import time
 from Core.CInpaintingTrainer import CInpaintingTrainer
@@ -20,59 +20,44 @@ import glob
 def _eval(dataset, model):
   T = time.time()
   # evaluate the model on the val dataset
-  lossPerSample = {'loss': [], 'pos': []}
-  predV = []
-  predDist = []
-  Y = []
+  loss = []
   for batchId in range(len(dataset)):
-    _, (y,) = batch = dataset[batchId]
-    loss, predP, dist = model.eval(batch)
-    predV.append(predP)
-    predDist.append(dist)
-    Y.append(y[:, -1, 0])
-    for l, pos in zip(loss, y[:, -1]):
-      lossPerSample['loss'].append(l)
-      lossPerSample['pos'].append(pos[0])
-      continue
+    batch = dataset[batchId]
+    loss_value = model.eval(batch)
+    loss.append(loss_value)
     continue
 
-  loss = np.mean(lossPerSample['loss'])
-  dist = np.mean(predDist)
+  loss = np.mean(loss)
   T = time.time() - T
-  return loss, dist, T
+  return loss, T
 
 def evaluator(datasets, model, folder, args):
   losses = [np.inf] * len(datasets) # initialize with infinity
-  dists = [np.inf] * len(datasets) # initialize with infinity
   def evaluate(onlyImproved=False):
     totalLoss = []
-    totalDist = []
     losses_dist = []
     for i, dataset in enumerate(datasets):
-      loss, dist, T = _eval(dataset, model)
-      losses_dist.append((loss, losses[i], dist, dists[i]))
+      loss, T = _eval(dataset, model)
       isImproved = loss < losses[i]
       if (not onlyImproved) or isImproved:
-        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f (%.5f)' % (
-          i + 1, len(datasets), T, loss, losses[i], dist, dists[i]
+        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f).' % (
+          i + 1, len(datasets), T, loss, losses[i],
         ))
       if isImproved:
-        print('Test %d / %d | Improved %.5f => %.5f, Distance: %.5f => %.5f' % (
-          i + 1, len(datasets), losses[i], loss, dists[i], dist
+        print('Test %d / %d | Improved %.5f => %.5f,' % (
+          i + 1, len(datasets), losses[i], loss,
         ))
-        model.save(folder, postfix='best-%d' % i) # save the model separately
+        # model.save(folder, postfix='best-%d' % i) # save the model separately
         losses[i] = loss
         pass
 
-      dists[i] = min(dist, dists[i]) # track the best distance
       totalLoss.append(loss)
-      totalDist.append(dist)
       continue
     if not onlyImproved:
-      print('Mean loss: %.5f | Mean distance: %.5f' % (
-        np.mean(totalLoss), np.mean(totalDist)
+      print('Mean loss: %.5f' % (
+        np.mean(totalLoss)
       ))
-    return np.mean(totalLoss), losses_dist
+    return np.mean(totalLoss)
   return evaluate
 
 def _modelTrainingLoop(model, dataset):
@@ -161,18 +146,17 @@ def main(args):
 
   # find folders with the name "/test-*/"
   evalDatasets = [
-    # CTestLoader(nm)
-    # for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
+    CTestInpaintingLoader(nm)
+    for nm in glob.glob(os.path.join(folder, 'test-inpainting', 'test-*/'))
   ]
   eval = evaluator(evalDatasets, model, folder, args)
-  bestLoss, _ = eval() # evaluate loaded model
+  bestLoss = eval() # evaluate loaded model
   bestEpoch = 0
   # wrapper for the evaluation function. It saves the model if it is better
   def evalWrapper(eval):
     def f(epoch, onlyImproved=False):
-      return
       nonlocal bestLoss, bestEpoch
-      newLoss, losses = eval(onlyImproved=onlyImproved)
+      newLoss = eval(onlyImproved=onlyImproved)
       if newLoss < bestLoss:
         print('Improved %.5f => %.5f' % (bestLoss, newLoss))
         if onlyImproved: #details
@@ -182,7 +166,7 @@ def main(args):
           print('-' * 80)
         bestLoss = newLoss
         bestEpoch = epoch
-        model.save(folder, postfix='best')
+        # model.save(folder, postfix='best')
       return
     return f
   

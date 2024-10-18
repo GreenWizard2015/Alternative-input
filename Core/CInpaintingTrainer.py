@@ -45,32 +45,36 @@ class CInpaintingTrainer:
   def compile(self):
     self._optimizer = NNU.createOptimizer()
 
+  def _calcLoss(self, x, y, training):
+    losses = {}
+    x = self._model.replaceByEmbeddings(x)
+    latents = self._encoder(x, training=training)['latent']
+    decoderArgs = {
+      'keyPoints': latents,
+      'time': y['time'],
+      'userId': x['userId'],
+      'placeId': x['placeId'],
+      'screenId': x['screenId'],
+    }
+    predictions = self._decoder(decoderArgs, training=training)
+    losses = {}
+    for k in predictions.keys():
+      pred = predictions[k]
+      gt = y[k]
+      tf.assert_equal(tf.shape(pred), tf.shape(gt))
+      loss = tf.losses.mse(gt, pred)
+      losses[f"loss-{k}"] = tf.reduce_mean(loss)
+      
+    # calculate total loss and final loss
+    losses['loss'] = sum(losses.values())
+    return losses, losses['loss']
+  
   def _trainStep(self, Data):
     print('Instantiate _trainStep')
     ###############
     x, y = Data
-    losses = {}
     with tf.GradientTape() as tape:
-      x = self._model.replaceByEmbeddings(x)
-      latents = self._encoder(x, training=True)['latent']
-      decoderArgs = {
-        'keyPoints': latents,
-        'time': y['time'],
-        'userId': x['userId'],
-        'placeId': x['placeId'],
-        'screenId': x['screenId'],
-      }
-      predictions = self._decoder(decoderArgs, training=True)
-      losses = {}
-      for k in predictions.keys():
-        pred = predictions[k]
-        gt = y[k]
-        tf.assert_equal(tf.shape(pred), tf.shape(gt))
-        loss = tf.losses.mse(gt, pred)
-        losses[f"loss-{k}"] = tf.reduce_mean(loss)
-        
-      # calculate total loss and final loss
-      losses['loss'] = loss = sum(losses.values())
+      losses, loss = self._calcLoss(x, y, training=True)
   
     self._optimizer.minimize(loss, tape.watched_variables(), tape=tape)
     ###############
@@ -84,18 +88,10 @@ class CInpaintingTrainer:
   
   def _eval(self, xy):
     print('Instantiate _eval')
-    x, (y,) = xy
-    x = self._replaceByEmbeddings(x)
-    y = y[:, :, 0]
-    predictions = self._model(x, training=False)
-    points = predictions['result'][:, :, :]
-    tf.assert_equal(tf.shape(points), tf.shape(y))
-
-    loss = self._pointLoss(y, points)
-    tf.assert_equal(tf.shape(loss), tf.shape(y)[:2])
-    _, dist = NNU.normVec(points - y)
-    return loss, points, dist
+    x, y = xy
+    losses, loss = self._calcLoss(x, y, training=False)
+    return loss
 
   def eval(self, data):
-    loss, sampled, dist = self._eval(data)
-    return loss.numpy(), sampled.numpy(), dist.numpy()
+    loss = self._eval(data)
+    return loss.numpy()
