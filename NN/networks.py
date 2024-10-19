@@ -351,7 +351,7 @@ def InpaintingDecoderModel(latentSize, embeddingsSize, pointsN=FACE_MESH_POINTS,
   # two eyes
   eyesN = eyeSize * eyeSize
   eyes = sMLP(sizes=[eyesN] * 2, activation='relu')(latents)
-  eyes = L.Dense(eyesN * 2)(eyes)
+  eyes = L.Dense(eyesN * 2, 'sigmoid')(eyes)
   eyes = L.Reshape((-1, eyeSize, eyeSize, 2))(eyes)
   # face points
   face = sMLP(sizes=[pointsN] * 2, activation='relu')(latents)

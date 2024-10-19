@@ -10,12 +10,12 @@ import numpy as np
 from Core.CDataSamplerInpainting import CDataSamplerInpainting
 from Core.CDatasetLoader import CDatasetLoader
 from Core.CTestInpaintingLoader import CTestInpaintingLoader
+import Core.Utils as Utils
 from collections import defaultdict
 import time
 from Core.CInpaintingTrainer import CInpaintingTrainer
 import tqdm
 import json
-import glob
 
 def _eval(dataset, model):
   T = time.time()
@@ -35,28 +35,26 @@ def evaluator(datasets, model, folder, args):
   losses = [np.inf] * len(datasets) # initialize with infinity
   def evaluate(onlyImproved=False):
     totalLoss = []
-    losses_dist = []
     for i, dataset in enumerate(datasets):
       loss, T = _eval(dataset, model)
       isImproved = loss < losses[i]
       if (not onlyImproved) or isImproved:
-        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f).' % (
-          i + 1, len(datasets), T, loss, losses[i],
+        dataset_id = ', '.join([str(x) for x in dataset.parametersIDs()])
+        print('Test %d / %d (%s) | %.2f sec | Loss: %.5f (%.5f).' % (
+          i + 1, len(datasets), dataset_id, T, loss, losses[i],
         ))
       if isImproved:
         print('Test %d / %d | Improved %.5f => %.5f,' % (
           i + 1, len(datasets), losses[i], loss,
         ))
-        # model.save(folder, postfix='best-%d' % i) # save the model separately
+        model.save(folder, postfix='best-%d' % i) # save the model separately
         losses[i] = loss
         pass
 
       totalLoss.append(loss)
       continue
     if not onlyImproved:
-      print('Mean loss: %.5f' % (
-        np.mean(totalLoss)
-      ))
+      print('Mean loss: %.5f' % (np.mean(totalLoss), ))
     return np.mean(totalLoss)
   return evaluate
 
@@ -84,28 +82,6 @@ def _trainer_from(args):
   if args.trainer == 'default': return CInpaintingTrainer
   raise Exception('Unknown trainer: %s' % (args.trainer, ))
 
-def averageModels(folder, model, noiseStd=0.0):
-  TV = [np.zeros_like(x) for x in model.trainable_variables()]
-  N = 0
-  for nm in glob.glob(os.path.join(folder, '*.h5')):
-    if not('best' in nm): continue # only the best models
-    model.load(nm, embeddings=True)
-    # add the weights to the total
-    weights = model.trainable_variables()
-    for i in range(len(TV)):
-      TV[i] += weights[i].numpy()
-      continue
-    N += 1
-    continue
-
-  # average the weights
-  TV = [(x / N) + np.random.normal(0.0, noiseStd, x.shape) for x in TV]
-  for v, new in zip(model.trainable_variables(), TV):
-    v.assign(new)
-    continue
-  model.compile() # recompile the model with the new weights
-  return
-
 def main(args):
   timesteps = args.steps
   folder = os.path.join(args.folder, 'Data')
@@ -125,15 +101,16 @@ def main(args):
       maxT=1.0,
       defaults=dict(
         timesteps=timesteps,
-        stepsSampling='uniform',
+        stepsSampling={'max frames': 10},
         # no augmentations by default
-        pointsNoise=0.01, pointsDropout=0.0,
+        pointsNoise=0.01, pointsDropout=0.01,
         eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
         targets=dict(keypoints=3, total=10),
       ),
-      keys=['clean', 'augmented'],
+      keys=['clean'],
     ),
     sampler_class=CDataSamplerInpainting,
+    test_folders=['train.npz'],
   )
   model = dict(timesteps=timesteps, stats=stats)
   if args.model is not None:
@@ -143,11 +120,11 @@ def main(args):
 
   model = trainer(**model)
 #   model._model.summary()
-
-  # find folders with the name "/test-*/"
+  
   evalDatasets = [
-    CTestInpaintingLoader(nm)
-    for nm in glob.glob(os.path.join(folder, 'test-inpainting', 'test-*/'))
+    CTestInpaintingLoader(os.path.join(folderName, 'test-inpainting'))
+    for folderName, _ in Utils.dataset_from_stats(stats, os.path.join(folder, 'remote'))
+    if os.path.exists(os.path.join(folderName, 'test-inpainting'))
   ]
   eval = evaluator(evalDatasets, model, folder, args)
   bestLoss = eval() # evaluate loaded model
@@ -166,7 +143,7 @@ def main(args):
           print('-' * 80)
         bestLoss = newLoss
         bestEpoch = epoch
-        # model.save(folder, postfix='best')
+        model.save(folder, postfix='best')
       return
     return f
   
@@ -176,14 +153,13 @@ def main(args):
     trainStep(
       desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
     )
-    # model.save(folder, postfix='latest')
+    model.save(folder, postfix='latest')
     eval(epoch)
 
     print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
     if args.patience <= (epoch - bestEpoch):
-      if 'stop' == args.on_patience:
-        print('Early stopping')
-        break
+      print('Early stopping')
+      break
     continue
   return
 
@@ -192,25 +168,14 @@ if __name__ == '__main__':
   parser.add_argument('--epochs', type=int, default=1000)
   parser.add_argument('--batch-size', type=int, default=64)
   parser.add_argument('--patience', type=int, default=5)
-  parser.add_argument('--on-patience', type=str, default='stop', choices=['stop', 'reset'])
   parser.add_argument('--steps', type=int, default=5)
   parser.add_argument('--model', type=str)
   parser.add_argument('--embeddings', default=False, action='store_true')
-  parser.add_argument(
-    '--average', default=False, action='store_true',
-    help='Load each model from the folder and average them weights'
-  )
   parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
   parser.add_argument('--modelId', type=str)
   parser.add_argument(
     '--trainer', type=str, default='default',
     choices=['default']
-  )
-  parser.add_argument('--debug', action='store_true')
-  parser.add_argument('--noise', type=float, default=1e-4)
-  parser.add_argument(
-    '--restarts', type=int, default=1,
-    help='Number of times to restart the model reinitializing the weights'
   )
   parser.add_argument(
     '--sampling', type=str, default='uniform',

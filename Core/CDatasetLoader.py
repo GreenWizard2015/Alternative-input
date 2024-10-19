@@ -1,9 +1,7 @@
 import Core.Utils as Utils
-import os, glob
+import os
 from Core.CSamplesStorage import CSamplesStorage
-from Core.CDataSampler import CDataSampler
 import numpy as np
-import tensorflow as tf
 from enum import Enum
 
 class ESampling(Enum):
@@ -11,40 +9,39 @@ class ESampling(Enum):
   UNIFORM = 'uniform'
   
 class CDatasetLoader:
-  def __init__(self, folder, samplerArgs, sampling, stats, sampler_class):
-    # recursively find all 'train.npz' files
-    trainFiles = glob.glob(os.path.join(folder, '**', 'train.npz'), recursive=True)
-    if 0 == len(trainFiles):
-      raise Exception('No training dataset found in "%s"' % (folder, ))
-      exit(1)
-    
-    print('Found %d training datasets' % (len(trainFiles), ))
-
+  def __init__(self, folder, samplerArgs, sampling, stats, sampler_class, test_folders):
     self._datasets = []
-    for trainFile in trainFiles:
-      print('Loading %s' % (trainFile, ))
-      # extract the placeId, userId, and screenId
-      parts = os.path.split(trainFile)[0].split(os.path.sep)
-      placeId, userId, screenId = parts[-3], parts[-2], parts[-1]
-      ds = sampler_class(
-        CSamplesStorage(
-          placeId=stats['placeId'].index(placeId),
-          userId=stats['userId'].index(userId),
-          screenId=stats['screenId'].index('%s/%s' % (placeId, screenId))
-        ),
-        **samplerArgs
-      )
-      ds.addBlock(Utils.datasetFrom(trainFile))
-      self._datasets.append(ds)
-      continue
+    for datasetFolder, ID in Utils.dataset_from_stats(stats, folder):
+      (place_id_index, user_id_index, screen_id_index) = ID
+      for test_folder in test_folders:
+        dataset = os.path.join(datasetFolder, test_folder)
+        if not os.path.exists(dataset):
+          continue
+        print('Loading %s' % (dataset, ))
+        print(f'ID: {ID}. Index: {1 + len(self._datasets)}')
+        ds = sampler_class(
+          CSamplesStorage(
+            placeId=place_id_index,
+            userId=user_id_index,
+            screenId=screen_id_index,
+          ),
+          **samplerArgs
+        )
+        ds.addBlock(Utils.datasetFrom(dataset))
+        self._datasets.append(ds)
+
+    if 0 == len(self._datasets):
+      raise Exception('No training dataset found in "%s"' % (folder, ))
     
-    print('Loaded %d datasets' % (len(self._datasets), ))
     validSamples = {
       i: len(ds.validSamples())
       for i, ds in enumerate(self._datasets)
     }
     # ignore datasets with no valid samples
     validSamples = {k: v for k, v in validSamples.items() if 0 < v}
+
+    print('Loaded %d datasets with %d valid samples' % (len(self._datasets), sum(validSamples.values())))
+
     dtype = np.uint8 if len(self._datasets) < 256 else np.uint32
     # create an array of dataset indices to sample from
     sampling = ESampling(sampling)

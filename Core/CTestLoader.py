@@ -10,7 +10,15 @@ class CTestLoader(tf.keras.utils.Sequence):
     ]
     self.on_epoch_end()
     return
-  
+
+  @lru_cache(maxsize=1)
+  def parametersIDs(self):
+    batch, _ = self[0]
+    userId = batch['userId'][0, 0, 0]
+    placeId = batch['placeId'][0, 0, 0]
+    screenId = batch['screenId'][0, 0, 0]
+    return placeId, userId, screenId
+      
   def on_epoch_end(self):
     return
 

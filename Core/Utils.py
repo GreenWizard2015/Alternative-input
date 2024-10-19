@@ -298,3 +298,24 @@ def countSamplesIn(folder):
       res += len(data['time'])
     continue
   return res
+
+def dataset_from_stats(stats, folder):
+  userId = stats['userId']
+  placeId = stats['placeId']
+  screenId = stats['screenId']
+  # screenId is a concatenation of placeId and screenId, to make it unique pair
+  PlaceAndScreenId = [x.split('/') for x in screenId]
+
+  blackList = set(stats.get('blacklist', []))
+  known = set([tuple(x) for x in blackList])
+  for screen_id_index, (place_id, screen_id) in enumerate(PlaceAndScreenId):
+    place_id_index = placeId.index(place_id)
+    # find user_id among all
+    for user_id_index, user_id in enumerate(userId):
+      datasetFolder = os.path.join(folder, place_id, user_id, screen_id)
+      if not os.path.exists(datasetFolder): continue
+      ID = (place_id_index, user_id_index, screen_id_index)
+      if ID in known: continue
+      known.add(ID)
+
+      yield (datasetFolder, ID)

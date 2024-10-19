@@ -40,6 +40,9 @@ class CInpaintingTrainer:
       self._eval,
       input_signature=[specification]
     )
+
+    if 'weights' in kwargs:
+      self.load(**kwargs['weights'])
     return
   
   def compile(self):
@@ -95,3 +98,9 @@ class CInpaintingTrainer:
   def eval(self, data):
     loss = self._eval(data)
     return loss.numpy()
+    
+  def save(self, folder=None, postfix=''):
+    self._model.save(folder=folder, postfix=postfix)
+
+  def load(self, folder=None, postfix='', embeddings=False):
+    self._model.load(folder=folder, postfix=postfix, embeddings=embeddings)

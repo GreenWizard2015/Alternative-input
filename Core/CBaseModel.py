@@ -22,7 +22,7 @@ class CBaseModel:
 
   def _modelFilename(self, folder, postfix=''):
     postfix = '-' + postfix if postfix else ''
-    return os.path.join(folder, '%s%s.h5' % (self._modelID, postfix))
+    return os.path.join(folder, '%s%s.h5' % (self._model, postfix))
   
   def save(self, folder=None, postfix=''):
     path = self._modelFilename(folder, postfix)
