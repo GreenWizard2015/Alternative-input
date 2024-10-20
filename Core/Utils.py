@@ -310,7 +310,7 @@ def dataset_from_stats(stats, folder):
   # screenId is a concatenation of placeId and screenId, to make it unique pair
   PlaceAndScreenId = [x.split('/') for x in screenId]
 
-  blackList = set(stats.get('blacklist', []))
+  blackList = stats.get('blacklist', [])
   known = set([tuple(x) for x in blackList])
   for screen_id_index, (place_id, screen_id) in enumerate(PlaceAndScreenId):
     place_id_index = placeId.index(place_id)
