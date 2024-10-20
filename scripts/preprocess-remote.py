@@ -194,7 +194,7 @@ def processFolder(folder, timeDelta, testRatio, framesPerChunk, testPadding, ski
 
   if (0 == len(training)) or (0 == len(testing)):
     print('No training or testing sets found!')
-    return 0, 0, True
+    return 0, 0, True, None
 
   def saveSubset(filename, idx):
     print('%s: %d frames' % (filename, len(idx)))

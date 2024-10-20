@@ -272,6 +272,7 @@ def extractSessions(dataset, TDelta):
   res = []
   T = 0
   prevSession = 0
+  N = len(dataset['time'])
   for i, t in enumerate(dataset['time']):
     if TDelta < (t - T):
       if 1 < (i - prevSession):
@@ -281,9 +282,12 @@ def extractSessions(dataset, TDelta):
     T = t
     continue
   # if last session is not empty, then append it
-  if prevSession < len(dataset['time']):
-    res.append((prevSession, len(dataset['time'])))
+  if prevSession < N:
+    res.append((prevSession, N))
     pass
+
+  # remove sessions with less than 2 samples
+  res = [x for x in res if 1 < (x[1] - x[0])]
 
   # check that end of one session is equal or less than start of the next
   for i in range(1, len(res)):
