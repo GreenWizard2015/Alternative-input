@@ -15,7 +15,6 @@ import time
 from Core.CInpaintingTrainer import CInpaintingTrainer
 import tqdm
 import json
-import wandb
 
 def _eval(dataset, model):
     T = time.time()
@@ -93,12 +92,7 @@ def _modelTrainingLoop(model, dataset):
         return {k: np.mean(v) for k, v in history.items()}
     return F
 
-def _trainer_from(args):
-    if args.trainer == 'default': return CInpaintingTrainer
-    raise Exception('Unknown trainer: %s' % (args.trainer, ))
-
 def main(args):
-    wandb.init(project=args.wandb_project, config=vars(args))  # Initialize wandb
     timesteps = args.steps
     folder = os.path.join(args.folder, 'Data')
 
@@ -106,7 +100,34 @@ def main(args):
     with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
         stats = json.load(f)
 
-    trainer = _trainer_from(args)
+    model = dict(timesteps=timesteps, stats=stats)
+    assert args.modelFolder is not None, 'Model folder is required'
+    # Extract placeId, userId, screenId from modelFolder
+    # modelFolder format: model-{dataset_id}, where dataset_id is ', '.join([str(x) for x in [placeId, userId, screenId]])
+    dataset_id = args.modelFolder.split('-')[1]
+    placeIdx, userIdx, screenIdx = [int(x) for x in dataset_id.split(', ')]
+    print(f"Place ID: {placeIdx}, User ID: {userIdx}, Screen ID: {screenIdx}")
+
+    users, places, screens = stats['userId'], stats['placeId'], stats['screenId']
+    # screenId is a concatenation of placeId and screenId, to make it unique pair
+    placeAndScreens = [x.split('/') for x in screens]
+    placeId = places[placeIdx]
+    userId = users[userIdx]
+    assert placeId == placeAndScreens[screenIdx][0], 'Place ID mismatch'    
+    _, screenId = placeAndScreens[screenIdx]
+    # prepare model to be loaded
+    modelFolder = os.path.join(args.folder, args.modelFolder)
+    if not os.path.exists(modelFolder):
+        raise Exception('Model folder not found: %s' % modelFolder)
+    
+    models = os.listdir(modelFolder)
+    print(f"Found models: {models}")
+    # format: {model id}-{loss:.5f}-*.*
+    bestModelLoss = '%.5f' % min([float(f.split('-')[1]) for f in models])
+    print(f"Best model loss: {bestModelLoss}")
+    model['weights'] = dict(folder=True, postfix=bestModelLoss, embeddings=True)
+
+    model = CInpaintingTrainer(**model)
     trainDataset = CDatasetLoader(
         os.path.join(folder, 'remote'),
         stats=stats,
@@ -117,8 +138,7 @@ def main(args):
             maxT=1.0,
             defaults=dict(
                 timesteps=timesteps,
-                # stepsSampling={'max frames': 10},
-                stepsSampling='uniform time',
+                stepsSampling={'max frames': 10},
                 # No augmentations by default
                 pointsNoise=0.01, pointsDropout=0.01,
                 eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
@@ -129,13 +149,6 @@ def main(args):
         sampler_class=CDataSamplerInpainting,
         test_folders=['train.npz'],
     )
-    model = dict(timesteps=timesteps, stats=stats)
-    if args.model is not None:
-        model['weights'] = dict(folder=folder, postfix=args.model, embeddings=args.embeddings)
-    if args.modelId is not None:
-        model['model'] = args.modelId
-
-    model = trainer(**model)
 
     evalDatasets = [
         CTestInpaintingLoader(os.path.join(folderName, 'test-inpainting'))
@@ -174,22 +187,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--steps', type=int, default=5)
-    parser.add_argument('--model', type=str)
-    parser.add_argument('--embeddings', default=False, action='store_true')
     parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
-    parser.add_argument('--modelId', type=str)
-    parser.add_argument(
-        '--trainer', type=str, default='default',
-        choices=['default']
-    )
-    parser.add_argument(
-        '--sampling', type=str, default='uniform',
-        choices=['uniform', 'as_is'],
-    )
-    parser.add_argument('--wandb-project', type=str, default='alternative-input-reconstruction')
-
+    parser.add_argument('--model-folder', type=str)
+    
     main(parser.parse_args())

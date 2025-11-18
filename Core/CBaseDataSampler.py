@@ -122,6 +122,33 @@ class CBaseDataSampler:
         return list(sorted(self._samples))
     
     def _framesFor(self, mainInd, samples, steps, stepsSampling):
+        if 'uniform time' == stepsSampling: # sample frames with the same/uniform time between them
+            samples = list(sorted(samples))
+            samples.append(mainInd)
+            minInd, maxInd = samples[0], samples[-1]
+            minT = self._storage[minInd]['time']
+            T = self._storage[maxInd]['time'] - minT
+            assert 0 < T, 'Time difference is zero'
+            candidates = []
+            # Lets say we have 10 frames, with time 0 and 1, we want to sample 3 frames
+            # we take the first frame, the last frame, and the frame in the middle, with time nearest to 0.5
+            times = [self._storage[ind]['time'] - minT for ind in samples]
+            times = np.array(times)
+            assert np.all(0 < np.diff(times)), 'Time is not strictly increasing'
+            assert steps <= len(samples), 'Not enough samples to sample frames'
+            t_list = np.linspace(0.0, T, num=steps)
+            assert len(t_list) == steps, f"Expected {steps} samples, got {len(t_list)}"
+            for t in t_list:
+                # find the frame with time nearest to t
+                idx = np.argmin(np.abs(times - t))
+                candidates.append(samples[idx])
+                # remove the frame from the list and time
+                samples.pop(idx)
+                times = np.delete(times, idx)
+                continue
+            samples = list(sorted(candidates))
+            assert len(samples) == steps, f"Expected {steps} samples, got {len(samples)}"
+            return samples
         if 'uniform' == stepsSampling:
             samples = random.sample(samples, steps - 1)
         elif 'last' == stepsSampling:

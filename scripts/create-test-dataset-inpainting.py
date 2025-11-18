@@ -17,12 +17,9 @@ def samplesStream(params, take, filename, ID, batch_size):
   if not isinstance(take, list): take = [take]
   placeId, userId, screenId = ID
   # use the stats to get the numeric values of the placeId, userId, and screenId  
+  storage = CSamplesStorage(placeId=placeId, userId=userId, screenId=screenId)
   ds = CDataSamplerInpainting(
-    CSamplesStorage(
-      placeId=placeId,
-      userId=userId,
-      screenId=screenId,
-    ),
+    storage,
     defaults=params, 
     batch_size=batch_size, minFrames=params['timesteps'],
     keys=take
@@ -101,7 +98,7 @@ def main(args):
   PARAMS = [
     dict(      
       timesteps=args.steps,
-      stepsSampling='uniform',
+      stepsSampling='uniform time',
       # no augmentations by default
       pointsNoise=0.01, pointsDropout=0.0,
       eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
