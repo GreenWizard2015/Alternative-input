@@ -1,0 +1,1 @@
+"""Core function tests."""

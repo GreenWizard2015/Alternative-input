@@ -1,7 +1,10 @@
-__pycache__
+*cache*
 /.settings
 /.pydevproject
 /.project
 /Data/
 /.vscode
 /debug.log
+/plan.md
+/task.md
+/exports/

@@ -1,302 +1,346 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-.
-# TODO: add the W&B integration
-import argparse, os, sys
-# add the root folder of the project to the path
-ROOT_FOLDER = os.path.abspath(os.path.dirname(__file__) + '/../')
-sys.path.append(ROOT_FOLDER)
+# -*- coding: utf-8 -*-
+"""Training script for gaze prediction models.
 
+Orchestrates the full training pipeline including:
+- Dataset loading and sampling (using temporal sequences)
+- Model initialization and training loop
+- Evaluation on test set
+- Checkpoint management and metrics tracking
+
+Usage:
+    python train.py --folder /path/to/dataset --batch-size 32 --steps 4
+
+The script loads data from a structured folder with remote dataset and stats,
+samples temporal sequences with augmentation, and trains the model with periodic
+evaluation on a test set.
+"""
+
+from typing import List
+from pathlib import Path
+import argparse
+from Core.models import ModelStudentTrainer, ModelWrapper
+import Core.Utils as Utils
+from Core.data.TestLoader import TestLoader
+from Core.data.DataSampler import DataSampler
+from Core.data.DatasetLoader import DatasetLoader
+from Core.data.AugmentationDefaults import DEFAULT_AUGMENTATION_PARAMS
+from scripts.training_utils import (
+    create_training_loop,
+    EvaluationTracker,
+    format_epoch_desc,
+)
 import numpy as np
-from Core.CDatasetLoader import CDatasetLoader
-from Core.CDataSampler import CDataSampler
-from Core.CTestLoader import CTestLoader
-from collections import defaultdict
-import time
-from Core.CModelTrainer import CModelTrainer
-import tqdm
-import json
-import glob
+import tensorflow as tf
+from Core.logging_config import get_logger
 
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+logger = get_logger(__name__)
+ROOT_FOLDER = Path(__file__).parent.parent
 
-def unbatch(qu):
-  qu = np.array(qu)
-  qu = qu.transpose(1, 0, *np.arange(2, len(qu.shape)))
-  return qu.reshape((qu.shape[0], -1, qu.shape[-1]))
 
-def plotPrediction(Y, predV, filename):
-  plt.figure(figsize=(8, 8))
-  plt.plot(Y[:, 0], Y[:, 1], 'o', markersize=1)
-  plt.plot(predV[:, 0], predV[:, 1], 'o', markersize=1)
-  for i in range(5):
-    d = i * 0.1
-    plt.gca().add_patch(
-      patches.Rectangle(
-        (d,d), 1-2*d, 1-2*d,
-        linewidth=1,edgecolor='r',facecolor='none'
-      )
+def _parse_model_weights(weights_str: str) -> dict:
+    """Parse weights string in format 'model/postfix' or just 'postfix'.
+
+    Args:
+        weights_str: Weight specification string
+
+    Returns:
+        Dictionary with model and postfix keys
+    """
+    if "/" in weights_str:
+        model_name, postfix = weights_str.split("/", 1)
+        return {"model": model_name, "postfix": postfix}
+    return {"model": weights_str, "postfix": "best"}
+
+
+def _transfer_model_weights(teacher, student):
+    def assign(w1, w2):
+        # reshape w1 to match w2 and assign
+        shape1 = w1.shape
+        if 0 == len(shape1):
+            shape1 = (1,)
+        shape2 = w2.shape
+        if 0 == len(shape2):
+            shape2 = (1,)
+        total1 = np.prod(shape1)
+        total2 = np.prod(shape2)
+        flat = (1, -1)
+        w1 = tf.reshape(w1, flat)
+        w1 = tf.tile(w1, (int(1 + total2 // total1), 1))
+        w1 = tf.reshape(w1, (-1,))
+        w1 = tf.reshape(w1[:total2], w2.shape)
+        w2.assign(w1)
+
+    teacher_weights = teacher.trainable_variables
+    student_weights = student.trainable_variables
+    assert len(teacher_weights) == len(student_weights)
+    for w1, w2 in zip(teacher_weights, student_weights):
+        assign(w1, w2)
+
+
+def _create_wrapper(
+    args, folder, scale, model_prefix, mode, weights, embeddings, force
+):
+    wrapper_args = {
+        **args,
+        "scale_mult": scale,
+        "model": f"{model_prefix}-{scale:.1f}",
+        "mode": mode,
+    }
+    # Load weights if provided
+    weights_res = None
+    if weights is not None:
+        weight_info = _parse_model_weights(weights)
+        wrapper_args["weights"] = weights_res = dict(
+            folder=str(folder),
+            postfix=weight_info["postfix"],
+            embeddings=embeddings,
+            force=force,
+        )
+        if "model" in weight_info:
+            wrapper_args["model"] = weight_info["model"]
+
+    return ModelWrapper(**wrapper_args), weights_res
+
+
+def _teachers_from(
+    args: argparse.Namespace, stats: dict, folder: Path
+) -> List[ModelWrapper]:
+    wrapper_args = dict(timesteps=args.steps, stats=stats)
+    teacher_scales = list(args.teacher_scale.split(","))
+    teacher_weights = list(args.teacher_weights.split(","))
+    assert len(teacher_scales) == len(teacher_weights)
+
+    teacher_wrappers = []
+    for weight, scale in zip(teacher_weights, teacher_scales):
+        teacher_wrapper, _ = _create_wrapper(
+            wrapper_args,
+            folder=str(folder),
+            scale=float(scale),
+            model_prefix="teacher",
+            mode="full",
+            weights=weight,
+            embeddings=True,
+            force=args.force,
+        )
+        teacher_wrappers.append(teacher_wrapper)
+    return teacher_wrappers
+
+
+def _student_from(args: argparse.Namespace, stats: dict, folder: Path) -> ModelWrapper:
+    wrapper_args = dict(timesteps=args.steps, stats=stats)
+    student_wrapper, student_weights = _create_wrapper(
+        wrapper_args,
+        folder=str(folder),
+        scale=args.student_scale,
+        model_prefix="student",
+        mode=args.mode,
+        weights=args.student_weights,
+        embeddings=not args.no_embeddings,
+        force=args.force,
     )
 
-  plt.savefig(filename)
-  plt.clf()
-  plt.close()
-  return
+    return student_wrapper, student_weights
 
-def _eval(dataset, model, plotFilename, args):
-  T = time.time()
-  # evaluate the model on the val dataset
-  lossPerSample = {'loss': [], 'pos': []}
-  predV = []
-  predDist = []
-  Y = []
-  for batchId in range(len(dataset)):
-    _, (y,) = batch = dataset[batchId]
-    loss, predP, dist = model.eval(batch)
-    predV.append(predP)
-    predDist.append(dist)
-    Y.append(y[:, -1, 0])
-    for l, pos in zip(loss, y[:, -1]):
-      lossPerSample['loss'].append(l)
-      lossPerSample['pos'].append(pos[0])
-      continue
-    continue
 
-  if args.debug: # plot the predictions and the ground truth
-    Y = unbatch(Y).reshape((-1, 2))
-    predV = unbatch(predV).reshape((-1, 2))
-    plotPrediction(Y, predV, plotFilename)
-  
-  loss = np.mean(lossPerSample['loss'])
-  dist = np.mean(predDist)
-  T = time.time() - T
-  return loss, dist, T
+def _trainer_from(
+    args: argparse.Namespace, stats: dict, folder: Path
+) -> ModelStudentTrainer:
+    """Instantiate trainer with model wrapper based on command-line arguments.
 
-def evaluator(datasets, model, folder, args):
-  losses = [np.inf] * len(datasets) # initialize with infinity
-  dists = [np.inf] * len(datasets) # initialize with infinity
-  def evaluate(onlyImproved=False):
-    totalLoss = []
-    totalDist = []
-    losses_dist = []
-    for i, dataset in enumerate(datasets):
-      loss, dist, T = _eval(dataset, model, os.path.join(folder, 'pred-%d.png' % i), args)
-      losses_dist.append((loss, losses[i], dist, dists[i]))
-      isImproved = loss < losses[i]
-      if (not onlyImproved) or isImproved:
-        print('Test %d / %d | %.2f sec | Loss: %.5f (%.5f). Distance: %.5f (%.5f)' % (
-          i + 1, len(datasets), T, loss, losses[i], dist, dists[i]
-        ))
-      if isImproved:
-        print('Test %d / %d | Improved %.5f => %.5f, Distance: %.5f => %.5f' % (
-          i + 1, len(datasets), losses[i], loss, dists[i], dist
-        ))
-        model.save(folder, postfix='best-%d' % i) # save the model separately
-        losses[i] = loss
-        pass
+    Creates the appropriate trainer (Student or Teacher) with:
+    - ModelWrapper for student model
+    - Optional teacher model for knowledge distillation
+    - Pre-trained weights if provided
 
-      dists[i] = min(dist, dists[i]) # track the best distance
-      totalLoss.append(loss)
-      totalDist.append(dist)
-      continue
-    if not onlyImproved:
-      print('Mean loss: %.5f | Mean distance: %.5f' % (
-        np.mean(totalLoss), np.mean(totalDist)
-      ))
-    return np.mean(totalLoss), losses_dist
-  return evaluate
+    Args:
+        args: Parsed command-line arguments containing trainer name and model config
+        stats: Dataset statistics dictionary
+        folder: Data folder path for loading/saving weights
 
-def _modelTrainingLoop(model, dataset):
-  def F(desc):
-    history = defaultdict(list)
-    # use the tqdm progress bar
-    with tqdm.tqdm(total=len(dataset), desc=desc) as pbar:
-      dataset.on_epoch_start()
-      for _ in range(len(dataset)):
-        sampled = dataset.sample()
-        assert 2 == len(sampled), 'The dataset should return a tuple with the input and the output'
-        X, Y = sampled
-        assert 'clean' in X, 'The input should contain the clean data'
-        assert 'augmented' in X, 'The input should contain the augmented data'
-        for nm in ['clean', 'augmented']:
-          item = X[nm]
-          assert 'points' in item, 'The input should contain the points'
-          assert 'left eye' in item, 'The input should contain the left eye'
-          assert 'right eye' in item, 'The input should contain the right eye'
-          assert 'time' in item, 'The input should contain the time'
-          assert 'userId' in item, 'The input should contain the userId'
-          assert 'placeId' in item, 'The input should contain the placeId'
-          assert 'screenId' in item, 'The input should contain the screenId'
-          continue
-        stats = model.fit(sampled)
-        history['time'].append(stats['time'])
-        for k in stats['losses'].keys():
-          history[k].append(stats['losses'][k])
-        # add stats to the progress bar (mean of each history)
-        pbar.set_postfix({k: '%.5f' % np.mean(v) for k, v in history.items()})
-        pbar.update(1)
-        continue
-      dataset.on_epoch_end()
-    return
-  return F
+    Returns:
+        Instantiated trainer
 
-def _trainer_from(args):
-  if args.trainer == 'default': return CModelTrainer
-  raise Exception('Unknown trainer: %s' % (args.trainer, ))
+    Raises:
+        ValueError: If requested trainer type is unknown.
 
-def averageModels(folder, model, noiseStd=0.0):
-  TV = [np.zeros_like(x) for x in model.trainable_variables()]
-  N = 0
-  for nm in glob.glob(os.path.join(folder, '*.h5')):
-    if not('best' in nm): continue # only the best models
-    model.load(nm, embeddings=True)
-    # add the weights to the total
-    weights = model.trainable_variables()
-    for i in range(len(TV)):
-      TV[i] += weights[i].numpy()
-      continue
-    N += 1
-    continue
+    Example:
+        >>> trainer = _trainer_from(args, stats, folder=Path("data"))
+        >>> trainer.summary()
+    """
+    teacher_wrappers = _teachers_from(args, stats, folder)
+    student_weights = None
+    if args.student_index is not None:
+        student_wrapper = teacher_wrappers.pop(args.student_index)
+    else:
+        student_wrapper, student_weights = _student_from(
+            args, stats=stats, folder=folder
+        )
+        if student_weights is None and (0 < len(teacher_wrappers)):
+            _transfer_model_weights(teacher_wrappers[0], student_wrapper)
 
-  # average the weights
-  TV = [(x / N) + np.random.normal(0.0, noiseStd, x.shape) for x in TV]
-  for v, new in zip(model.trainable_variables(), TV):
-    v.assign(new)
-    continue
-  model.compile() # recompile the model with the new weights
-  return
+    if args.no_embeddings:
+        student_wrapper.reset_embeddings()
 
-def main(args):
-  timesteps = args.steps
-  folder = os.path.join(args.folder, 'Data')
-  stats = None
-  with open(os.path.join(folder, 'remote', 'stats.json'), 'r') as f:
-    stats = json.load(f)
-
-  trainer = _trainer_from(args)
-  trainDataset = CDatasetLoader(
-    os.path.join(folder, 'remote'),
-    stats=stats,
-    sampling=args.sampling,
-    samplerArgs=dict(
-      batch_size=args.batch_size,
-      minFrames=timesteps,
-      maxT=1.0,
-      defaults=dict(
-        timesteps=timesteps,
-        stepsSampling='uniform',
-        # no augmentations by default
-        pointsNoise=0.01, pointsDropout=0.0,
-        eyesDropout=0.1, eyesAdditiveNoise=0.01, brightnessFactor=1.5, lightBlobFactor=1.5,
-      ),
-    ),
-    sampler_class=CDataSampler
-  )
-  model = dict(timesteps=timesteps, stats=stats)
-  if args.model is not None:
-    model['weights'] = dict(folder=folder, postfix=args.model, embeddings=args.embeddings)
-  if args.modelId is not None:
-    model['model'] = args.modelId
-
-  model = trainer(**model)
-  model._model.summary()
-
-  # find folders with the name "/test-*/"
-  evalDatasets = [
-    CTestLoader(nm)
-    for nm in glob.glob(os.path.join(folder, 'test-main', 'test-*/'))
-  ]
-  eval = evaluator(evalDatasets, model, folder, args)
-  bestLoss, _ = eval() # evaluate loaded model
-  bestEpoch = 0
-  # wrapper for the evaluation function. It saves the model if it is better
-  def evalWrapper(eval):
-    def f(epoch, onlyImproved=False):
-      nonlocal bestLoss, bestEpoch
-      newLoss, losses = eval(onlyImproved=onlyImproved)
-      if newLoss < bestLoss:
-        print('Improved %.5f => %.5f' % (bestLoss, newLoss))
-        if onlyImproved: #details
-          for i, (loss, bestLoss_, dist, bestDist) in enumerate(losses):
-            print('Test %d | Loss: %.5f (%.5f). Distance: %.5f (%.5f)' % (i + 1, loss, bestLoss_, dist, bestDist))
-            continue
-          print('-' * 80)
-        bestLoss = newLoss
-        bestEpoch = epoch
-        model.save(folder, postfix='best')
-      return
-    return f
-  
-  eval = evalWrapper(eval)
-
-  def performRandomSearch(epoch=0):
-    nonlocal bestLoss, bestEpoch
-    averageModels(folder, model, noiseStd=0.0)
-    eval(epoch=epoch, onlyImproved=True) # evaluate the averaged model
-    for _ in range(args.restarts):
-      # and add some noise
-      averageModels(folder, model, noiseStd=args.noise)
-      # re-evaluate the model with the new weights
-      eval(epoch=epoch, onlyImproved=True)
-      continue
-    return
-  
-  if args.average:
-    performRandomSearch()
-
-  trainStep = _modelTrainingLoop(model, trainDataset)
-  for epoch in range(args.epochs):
-    trainStep(
-      desc='Epoch %.*d / %d' % (len(str(args.epochs)), epoch, args.epochs),
+    return ModelStudentTrainer(
+        model_wrapper=student_wrapper,
+        teachers_models=teacher_wrappers,
+        feature_match_loss_weight=args.feature_match_weight,
+        weights=student_weights,
     )
-    model.save(folder, postfix='latest')
-    eval(epoch)
 
-    print('Passed %d epochs since the last improvement (best: %.5f)' % (epoch - bestEpoch, bestLoss))
-    if args.patience <= (epoch - bestEpoch):
-      if 'stop' == args.on_patience:
-        print('Early stopping')
-        break
-      if 'reset' == args.on_patience:
-        print('Resetting the model to the average of the best models')
-        bestEpoch = epoch # reset the patience
-        performRandomSearch(epoch=epoch)
-    continue
-  return
 
-if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--epochs', type=int, default=1000)
-  parser.add_argument('--batch-size', type=int, default=64)
-  parser.add_argument('--patience', type=int, default=5)
-  parser.add_argument('--on-patience', type=str, default='stop', choices=['stop', 'reset'])
-  parser.add_argument('--steps', type=int, default=5)
-  parser.add_argument('--model', type=str)
-  parser.add_argument('--embeddings', default=False, action='store_true')
-  parser.add_argument(
-    '--average', default=False, action='store_true',
-    help='Load each model from the folder and average them weights'
-  )
-  parser.add_argument('--folder', type=str, default=ROOT_FOLDER)
-  parser.add_argument('--modelId', type=str)
-  parser.add_argument(
-    '--trainer', type=str, default='default',
-    choices=['default']
-  )
-  parser.add_argument(
-    '--schedule', type=str, default=None,
-    help='JSON file with the scheduler parameters for sampling the training dataset'
-  )
-  parser.add_argument('--debug', action='store_true')
-  parser.add_argument('--noise', type=float, default=1e-4)
-  parser.add_argument(
-    '--restarts', type=int, default=1,
-    help='Number of times to restart the model reinitializing the weights'
-  )
-  parser.add_argument(
-    '--sampling', type=str, default='uniform',
-    choices=['uniform', 'as_is'],
-  )
+def main(args: argparse.Namespace) -> None:
+    """Execute the training pipeline.
 
-  main(parser.parse_args())
-  pass
+    Loads datasets, initializes model, and runs training loop with periodic
+    evaluation. Uses early stopping based on validation performance.
+
+    Args:
+        args: Command-line arguments including:
+            - folder: Path to dataset folder
+            - epochs: Number of training epochs
+            - batch_size: Batch size for training
+            - batch_per_epoch: Number of samples per epoch (default: 20000)
+            - patience: Early stopping patience in epochs
+            - steps: Number of timesteps per sample
+            - sampling: Sampling strategy
+            - model: Optional pre-trained model to load
+            - embeddings: Optional embedding weights to load
+            - mode: Training mode "full" (two-stage, default) or "encoder" (Face2Step only)
+            - teacher_scale: Teacher model scale multiplier for knowledge distillation (default: 1.0)
+            - teacher_weights: Path to pre-trained teacher weights (optional)
+            - feature_match_weight: Feature matching loss weight [0.0-1.0] (default: 0.5)
+            - adapter_intermediate_dim: Adapter bottleneck dimension (optional, default: geometric mean)
+
+    Returns:
+        None (saves best and latest model checkpoints to disk)
+    """
+    timesteps = args.steps
+    folder = Path(args.folder) / "Data"
+    json_path = str(folder / "remote" / "stats.json")
+    stats = Utils.read_json(json_path)
+
+    trainDataset = DatasetLoader(
+        json_path,
+        samplerArgs=dict(
+            batch_size=args.batch_size,
+            minFrames=timesteps,
+            maxT=1.0,
+            defaults=dict(
+                timesteps=timesteps,
+                stepsSampling="uniform",
+                **DEFAULT_AUGMENTATION_PARAMS,
+            ),
+        ),
+        sampler_class=DataSampler,
+        batchPerEpoch=args.batch_per_epoch,
+        sampling_mode=args.sampling,
+    )
+    # Instantiate trainer with model wrapper
+    model = _trainer_from(args, stats, folder)
+
+    # find folders with the name "/test-*/"
+    evalDatasets = [
+        TestLoader(str(nm), batch_size=args.test_batch_size)
+        for nm in sorted(folder.glob("test-main/test-*/"))
+    ]
+    evalDatasets = [ds for ds in evalDatasets if 0 < len(ds)]
+    # Use EvaluationTracker for best model management
+    tracker = EvaluationTracker(evalDatasets, model, folder=folder, save_postfix="best")
+    tracker.evaluate_gaze(epoch=0)  # evaluate loaded model
+
+    # Create training loop using utilities
+    trainStep = create_training_loop(model, trainDataset)
+    for epoch in range(1, args.epochs + 1):
+        trainStep(
+            desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}"
+        )
+        model.save(str(folder), postfix="latest")
+        tracker.evaluate_gaze(epoch=epoch)  # evaluate loaded model
+        logger.info(tracker.last_output)
+        if args.patience <= (epoch - tracker.best_epoch):
+            logger.info("Early stopping")
+            break
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-per-epoch", type=int, default=-1)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--no-embeddings", default=False, action="store_true")
+    parser.add_argument(
+        "--force",
+        default=False,
+        action="store_true",
+        help="Force training to continue even if weights are missing.",
+    )
+    parser.add_argument("--folder", type=str, default=str(ROOT_FOLDER))
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="full",
+        choices=["full", "encoder"],
+        help="Training mode: 'full' (two-stage with temporal) or 'encoder' (Face2Step only). Default: full",
+    )
+    parser.add_argument(
+        "--sampling",
+        type=str,
+        default="oversample",
+        choices=["oversample", "undersample"],
+        help="Dataset sampling strategy",
+    )
+
+    # Knowledge Distillation Arguments
+    parser.add_argument(
+        "--teacher-scale",
+        type=str,
+        default="",
+        help="Teacher model scale multiplier.",
+    )
+    parser.add_argument(
+        "--teacher-weights",
+        type=str,
+        default="",
+        help="Path to pre-trained teacher model weights (optional). "
+        "Format: 'postfix' or 'model/postfix'. "
+        "If provided, loads weights into frozen teacher for distillation. "
+        "Weights must match --teacher-scale dimensions.",
+    )
+    parser.add_argument(
+        "--student-index",
+        type=int,
+        default=None,
+        help="Index of teacher to become a student model (optional). ",
+    )
+    parser.add_argument(
+        "--student-weights",
+        type=str,
+        default=None,
+        help="Path to pre-trained student model weights (optional). ",
+    )
+    parser.add_argument(
+        "--student-scale",
+        type=float,
+        default=1.0,
+        help="Student model scale multiplier.",
+    )
+    parser.add_argument(
+        "--feature-match-weight",
+        type=float,
+        default=1.0,
+        help="Feature matching loss weight [0.0-1.0] (default: 1.0). "
+        "Controls balance between task loss and latent feature matching. ",
+    )
+    parser.add_argument(
+        "--test-batch-size",
+        type=int,
+        default=None,
+        help="Test batch size for sub-batching. If None, use full npz batch sizes. "
+        "Useful for memory management or performance optimization.",
+    )
+    args = parser.parse_args()
+    main(args)

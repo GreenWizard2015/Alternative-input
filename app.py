@@ -1,417 +1,494 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-.
+# -*- coding: utf-8 -*-
+"""Eye-tracking UI application with multiple interaction modes.
+
+Provides a pygame-based application for eye-tracking data collection and visualization
+with support for multiple application modes (games, calibration, data collection, etc.),
+real-time gaze prediction, animated effects, and flexible tracking/prediction pipeline.
+"""
+import argparse
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
 import pygame
 import pygame.locals as G
-import cv2
-from cv2_enumerate_cameras import enumerate_cameras
 
-from Core.CThreadedEyeTracker import CThreadedEyeTracker
-from Core.CDataset import CDataset
-from Core.CLearnablePredictor import CLearnablePredictor
-from Core.CDummyPredictor import CDummyPredictor
-from Core.CModelWrapper import CModelWrapper
-from Core.Utils import FACE_MESH_INVALID_VALUE
-import os, time
-from App.Utils import Colors, numpyToSurfaceBind
 import App.AppModes as AppModes
-from App.CRandomIllumination import CRandomIllumination
-from App.CBackground import CBackground
-import argparse
+import Core.Utils as Utils
+from App.AppInitializer import (
+    create_camera_view,
+    create_eyes_view,
+    get_available_webcams,
+    initialize_pygame_display,
+)
+from App.Background import Background
+from App.DrawingUtils import draw_text
+from App.EventHandlers import handle_key_down_event
+from App.RandomIllumination import RandomIllumination
+from App.RenderingHelpers import render_info, render_predictions
+from App.TickHandlers import (
+    transform_tracked_data,
+    update_prediction_history,
+    update_prediction_smoothing,
+)
+from App.Utils import Colors, numpyToSurfaceBind
+from Core.data.Dataset import Dataset
+from Core.models.ModelWrapper import ModelWrapper
+from Core.tracking.DummyPredictor import DummyPredictor
+from Core.tracking.LearnablePredictor import LearnablePredictor, PredictionResult
+from Core.tracking.ThreadedEyeTracker import ThreadedEyeTracker
+from Core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Prediction smoothing parameters
+GAZE_PREDICTION_SMOOTHING_FACTOR = 0.9
+
+# Display layout constants
+CAMERA_VIEW_X = 50
+CAMERA_VIEW_Y = 200
+CAMERA_VIEW_SIZE = 300
+EYES_VIEW_Y_OFFSET = 50
+EYES_VIEW_HEIGHT = 100
+TEXT_INFO_START_X = 5
+TEXT_INFO_START_Y = 95
+TEXT_LINE_HEIGHT = 25
+PREDICTION_HISTORY_LIMIT = 15
+TARGET_DRAW_STEP = 2
+CIRCLE_WIDTH_MULTIPLIER = 7
+TEXT_POSITION_X = 5
+TEXT_POSITION_Y = 5
+
+# User, screen, camera, monitor, and place identifiers for model configuration
+DEFAULT_USER_ID = "ce42c1a9-f4ef-42d6-a219-cf25fad912ed"
+DEFAULT_SCREEN_ID = "a28a2ad8-4349-b038-5af8-46a658e82543"
+DEFAULT_CAMERA_ID = "camera1"
+DEFAULT_MONITOR_ID = "monitor1"
+DEFAULT_PLACE_ID = "de0ce61b-2fc0-02f6-efb5-22af447bfb05"
+
 
 class App:
-  def __init__(
-    self, tracker, dataset, predictor, 
-    fps=30, hasPredictions=True, 
-    showWebcam=False, showFaceMesh=False, showEyes=not False,
-    current_webcam=0
-  ):
-    self._showFaceMesh = showFaceMesh
-    self._faceMesh = None
-    self._canPredict = hasPredictions
-    self._fps = fps
-    self._running = True
-    
-    self._lastPrediction = None
-    self._smoothedPrediction = (0, 0)
-    self._showPredictions = True
-    
-    self._tracker = tracker
-    self._dataset = dataset
-    self._predictor = predictor
-    
-    self._currentModeId = 0
-    self._currentMode = AppModes.APP_MODES[0](self)
-    
-    self._history = []
-    self._enableIllumination = False
-    self._illumination = CRandomIllumination()
-    self._background = CBackground()
+    """Main eye-tracking application with pygame interface.
 
-    self._cameraView = self._cameraSurface = None
-    if showWebcam:
-      self._cameraView = np.array([(50, 200), (50 + 300, 200 + 300)])
-      self._cameraSurface = pygame.Surface(self._cameraView[1] - self._cameraView[0])
+    Manages the complete eye-tracking pipeline including facial data capture,
+    model prediction, data collection, and interactive mode selection. Supports
+    multiple visualization modes and real-time data processing with optional
+    webcam and eye region display.
 
-    self._eyesView = self._eyesSurface = None
-    if showEyes:
-      self._eyesView = np.array([(50, 200 + 300 + 50), (50 + 300, 200 + 300 + 50 + 100)])
-      self._eyesSurface = pygame.Surface(self._eyesView[1] - self._eyesView[0])
+    Attributes:
+        _tracker: Eye/face tracker providing real-time facial landmarks and eye images
+        _dataset: Storage for collecting training samples during collection modes
+        _predictor: Model wrapper for making gaze predictions from facial data
+        _currentMode: Active application mode (game, collection, visualization, etc.)
+        _illumination: Animated light sources for background effects
+        _background: Background renderer with dynamic color and brightness
+        _smoothedPrediction: Exponentially smoothed gaze prediction for display
+    """
 
-    self._predictorMaskFace = False
-    self._predictorMaskLeftEye = False
-    self._predictorMaskRightEye = False
+    def __init__(
+        self,
+        tracker: ThreadedEyeTracker,
+        dataset: Dataset,
+        predictor: Union[LearnablePredictor, DummyPredictor],
+        fps: int = 30,
+        hasPredictions: bool = True,
+        showWebcam: bool = False,
+        showFaceMesh: bool = False,
+        showEyes: bool = True,
+        current_webcam: Union[int, str] = 0,
+    ) -> None:
+        self._showFaceMesh = showFaceMesh
+        self._faceMesh: Optional[np.ndarray] = None
+        self._canPredict = hasPredictions
+        self._fps = fps
+        self._running = True
 
-    self._webcam = current_webcam
-    webcamsList = []
-    for camera_info in enumerate_cameras():
-      webcamsList.append('%s: %s' % (camera_info.index, camera_info.name))
+        self._lastPrediction: Optional[PredictionResult] = None
+        self._smoothedPrediction = np.array([0.0, 0.0])
+        self._showPredictions = True
 
-    self._webcamsList = webcamsList
-    return
-  
-  @property
-  def hasPredictions(self): return self._canPredict
-  
-  def _transformTracked(self, tracked):
-    if tracked is None: return None
+        self._tracker = tracker
+        self._dataset = dataset
+        self._predictor = predictor
 
-    tracked = tracked['tracked']
-    res = dict(**tracked)
+        self._currentModeId = 0
+        self._currentMode = AppModes.APP_MODES[0](app=self)
 
-    if self._predictorMaskFace:
-      res['face points'] = np.full_like(tracked['face points'], FACE_MESH_INVALID_VALUE)
+        self._history: List[np.ndarray] = []
+        self._enableIllumination = False
+        self._illumination = RandomIllumination()
+        self._background = Background()
 
-    if self._predictorMaskLeftEye:
-      res['left eye'] = np.full_like(tracked['left eye'], 0.0)
+        self._cameraView = self._cameraSurface = None
+        if showWebcam:
+            self._cameraView, self._cameraSurface = create_camera_view(
+                CAMERA_VIEW_X, CAMERA_VIEW_Y, CAMERA_VIEW_SIZE
+            )
 
-    if self._predictorMaskRightEye:
-      res['right eye'] = np.full_like(tracked['right eye'], 0.0)
-    return res
-  
-  @property
-  def _display_surf(self):
-    return pygame.display.get_surface()
-  
-  @property
-  def WH(self):
-    return np.array(pygame.display.get_surface().get_size(), np.float32)
-  
-  def on_init(self):
-    pygame.init()
-    
-    info = pygame.display.Info()
-    w = info.current_w
-    h = info.current_h
-    pygame.display.set_mode((w, h), pygame.FULLSCREEN)
-    
-    pygame.display.set_caption('App')
-    self._font = pygame.font.Font(pygame.font.get_default_font(), 16)
-    self._running = True
-    return True
-  
-  def on_event(self, event):
-    if event.type == G.QUIT:
-      self._running = False
-      return
+        self._eyesView = self._eyesSurface = None
+        if showEyes:
+            self._eyesView, self._eyesSurface = create_eyes_view(
+                CAMERA_VIEW_X,
+                CAMERA_VIEW_Y,
+                CAMERA_VIEW_SIZE,
+                EYES_VIEW_Y_OFFSET,
+                EYES_VIEW_HEIGHT,
+            )
 
-    self._background.on_event(event)
-    self._currentMode.on_event(event)
-    if event.type == G.KEYDOWN:
-      if G.K_ESCAPE == event.key:
-        self._running = False
-        return
-      
-      if G.K_s == event.key:
+        self._predictorMaskFace = False
+        self._predictorMaskLeftEye = False
+        self._predictorMaskRightEye = False
+
+        self._webcam = (
+            int(current_webcam)
+            if isinstance(current_webcam, str) and current_webcam.isdigit()
+            else (current_webcam if isinstance(current_webcam, int) else 0)
+        )
+        self._webcams_list = get_available_webcams()
+
+    @property
+    def hasPredictions(self) -> bool:
+        """Check if prediction model is available.
+
+        Returns:
+            True if predictions can be made, False otherwise.
+        """
+        return self._canPredict
+
+    def _transformTracked(
+        self, tracked: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Transform tracked facial data by applying predictor masks.
+
+        Args:
+            tracked: Dictionary with 'tracked' key containing facial data.
+
+        Returns:
+            Modified tracked data dictionary or None if input is None.
+        """
+        return transform_tracked_data(
+            tracked,
+            self._predictorMaskFace,
+            self._predictorMaskLeftEye,
+            self._predictorMaskRightEye,
+        )
+
+    @property
+    def _display_surf(self) -> pygame.Surface:
+        """Get the pygame display surface.
+
+        Returns:
+            The current pygame display surface.
+
+        Raises:
+            RuntimeError: If pygame display has not been initialized.
+        """
+        return pygame.display.get_surface()
+
+    @property
+    def WH(self) -> np.ndarray:
+        """Get window width and height.
+
+        Returns:
+            (width, height) as float32 numpy array.
+        """
+        return np.array(pygame.display.get_surface().get_size(), np.float32)
+
+    def on_init(self) -> bool:
+        """Initialize pygame and set up display window."""
+        _, self._font = initialize_pygame_display()
+        self._running = True
+        return True
+
+    def on_event(self, event: Any) -> None:
+        """Handle pygame events.
+
+        Args:
+            event: Pygame event object.
+        """
+        if event.type == G.QUIT:
+            self._running = False
+            return
+
+        self._background.on_event(event)
+        self._currentMode.on_event(event)
+
+        if event.type == G.KEYDOWN:
+            if event.key == G.K_ESCAPE:
+                self._running = False
+                return
+
+            handle_key_down_event(
+                event.key,
+                len(AppModes.APP_MODES),
+                self._toggle_predictions,
+                self._toggle_illumination,
+                self._toggle_face_mask,
+                self._toggle_left_eye_mask,
+                self._toggle_right_eye_mask,
+                self._change_mode,
+            )
+
+    def _toggle_predictions(self) -> None:
+        """Toggle predictions display."""
         self._showPredictions = not self._showPredictions
-        return
-      
-      if G.K_1 <= event.key < (G.K_1 + len(AppModes.APP_MODES)):
-        self._currentModeId = ind = event.key - G.K_1
-        self._currentMode = AppModes.APP_MODES[ind](self)
-      # toggle illumination (L)
-      if G.K_l == event.key:
+
+    def _toggle_illumination(self) -> None:
+        """Toggle illumination."""
         self._enableIllumination = not self._enableIllumination
-      # predictor masks switches (F1, F2, F3)
-      if G.K_F1 == event.key:
+
+    def _toggle_face_mask(self) -> None:
+        """Toggle face mask."""
         self._predictorMaskFace = not self._predictorMaskFace
 
-      if G.K_F2 == event.key:
+    def _toggle_left_eye_mask(self) -> None:
+        """Toggle left eye mask."""
         self._predictorMaskLeftEye = not self._predictorMaskLeftEye
 
-      if G.K_F3 == event.key:
+    def _toggle_right_eye_mask(self) -> None:
+        """Toggle right eye mask."""
         self._predictorMaskRightEye = not self._predictorMaskRightEye
-    return
-  
-  def _updateEyesImage(self, tracked):
-    if self._eyesSurface is None: return
 
-    def drawPoints(img, points, rect, color=Colors.RED):
-      return img # disabled
-      A = rect[0]
-      rectDim = rect[1] - A
-      # remove points outside of the rect
-      points = (points - A) / rectDim
-      mask = np.logical_and(0.0 <= points, points <= 1.0)
-      mask = np.all(mask, axis=-1)
-      points = points[mask]
+    def _change_mode(self, mode_index: int) -> None:
+        """Change application mode.
 
-      img = np.repeat(img[..., None], 3, axis=2) # make RGB
-      hw = np.array(img.shape[:2][::-1])
-      points = np.multiply(points, hw[None]).astype(np.int32)
-      color = np.array(color, np.uint8)
-      for p in points:
-        img[p[1], p[0]] = color
-      return img
+        Args:
+            mode_index: Index of the new mode.
+        """
+        self._currentModeId = mode_index
+        self._currentMode = AppModes.APP_MODES[mode_index](app=self)
 
-    eyes = np.concatenate([
-      drawPoints(tracked['left eye'], tracked['face points'], tracked['left eye area']),
-      drawPoints(tracked['right eye'], tracked['face points'], tracked['right eye area'])
-    ], axis=1)
-    numpyToSurfaceBind(eyes, self._eyesSurface)
-    return
-   
-  def on_tick(self, deltaT):
-    lastTracked = None
-    tracked = self._tracker.track()
-    if not(tracked is None):
-      self._currentMode.on_sample(tracked)
-      self._faceMesh = tracked['face points'].copy()
-      
-      if not(self._cameraView is None):
-        numpyToSurfaceBind(tracked['raw'][..., ::-1], self._cameraSurface)
- 
-      self._updateEyesImage(tracked)
-      lastTracked = {
-        'tracked': tracked,
-        'pos': np.array(self._smoothedPrediction, np.float32)
-      }
-      pass
-    #####################
-    prediction = self._predictor( self._transformTracked(lastTracked) )
-    if not(prediction is None):
-      self._lastPrediction = prediction
-      pred = prediction[0]
-      predPos = pred['coords']
+    def _updateEyesImage(self, tracked: Optional[Dict[str, Any]]) -> None:
+        """Update eye region display from tracked facial data.
 
-      self._history.append(predPos)
-      self._history = self._history[-15:]
-      self._currentMode.on_prediction(predPos, lastTracked)
-      pass
-    #####################
-    if self._lastPrediction:
-      factor = 0.9
-      pred = self._lastPrediction[0]
-      predPos = pred['coords']
-      self._smoothedPrediction = np.clip(
-        np.multiply(self._smoothedPrediction, factor) + np.multiply(predPos, 1.0 - factor),
-        0.0, 1.0
-      )
-    #####################
-    self._background.on_tick(deltaT)
-    self._currentMode.on_tick(deltaT)
-    if self._enableIllumination:
-      self._illumination.on_tick(deltaT)
-    return
-    
-  def on_render(self, fps=0.0):
-    window = self._display_surf
-    self._background.on_render(window)
-    
-    if self._enableIllumination:
-      self._illumination.on_render(window)
+        Args:
+            tracked: Tracked facial data dictionary or None.
 
-    if not(self._cameraSurface is None): # render camera surface
-      window.blit(self._cameraSurface, self._cameraView)
+        Note:
+            Eye surface rendering is currently not implemented.
+        """
+        if self._eyesSurface is None or tracked is None:
+            return
 
-    if not(self._eyesSurface is None): # render eyes surface
-      window.blit(self._eyesSurface, self._eyesView)
-    
-    self._currentMode.on_render(window)
-    if self._currentMode.paused:
-      wh = np.array(window.get_size())
-      txt = 'Collection paused'
-      self.drawText(txt, wh // 2, Colors.RED, scale=2.0, center=True)
-      
-    self._renderPredictions()
-    
-    self._renderInfo(fps=fps)
-    pygame.display.flip()
-    return
-  
-  def _renderInfo(self, fps):
-    startPoints = (5, 95)
-    texts = []
-    texts.append(('Samples: %d' % (self._dataset.totalSamples, ), Colors.RED))
-    modes = []
-    if self._predictorMaskFace: modes.append('no face')
-    if self._predictorMaskLeftEye: modes.append('no left eye')
-    if self._predictorMaskRightEye: modes.append('no right eye')
+    def on_tick(self, delta_t: float) -> None:
+        """Update application state for a single frame.
 
-    if 0 < len(modes):
-      texts.append(('%s' % (', '.join(modes), ), Colors.GREEN))
-    
-    texts.append(('FPS: %.1f' % (fps, ), Colors.BLACK))
-    # print screen resolution
-    wh = self.WH
-    texts.append(('Resolution: %d x %d' % (wh[0], wh[1]), Colors.BLACK))
+        Args:
+            delta_t: Time delta since last frame in seconds.
+        """
+        # Track facial landmarks and update prediction
+        lastTracked = None
+        tracked = self._tracker.track()
+        if tracked is not None:
+            self._currentMode.on_sample(tracked)
+            self._faceMesh = tracked["face points"].copy()
 
-    if self._showFaceMesh and not(self._faceMesh is None):
-      scaled = np.multiply(self._faceMesh, self.WH[None])
-      scaled = scaled.astype(np.int32)
-      for p in scaled:
-        pygame.draw.circle(self._display_surf, Colors.RED, tuple(p), 2, 0)
-        continue
-      pass
+            if self._cameraView is not None and self._cameraSurface is not None:
+                numpyToSurfaceBind(tracked["raw"][..., ::-1], self._cameraSurface)
 
-    # print webcam info
-    texts.append(('', Colors.BLACK))
-    texts.append(('Webcams:', Colors.BLACK))
-    for i, name in enumerate(self._webcamsList):
-      color = Colors.RED if i == self._webcam else Colors.BLACK
-      texts.append(('%d: %s' % (i, name), color))
-      continue
+            self._updateEyesImage(tracked)
+            lastTracked = {
+                "tracked": tracked,
+                "pos": np.array(self._smoothedPrediction, np.float32),
+            }
 
-    self.drawTextList(texts, startPoints, height=25)
-    return
+        # Get gaze prediction from model
+        prediction: Optional[PredictionResult] = self._predictor(
+            self._transformTracked(lastTracked)
+        )
+        if prediction is not None:
+            self._lastPrediction = prediction
+            predPos = prediction.prediction.result[0, -1]
+            self._history = update_prediction_history(
+                self._history, predPos, PREDICTION_HISTORY_LIMIT
+            )
+            self._currentMode.on_prediction(predPos, lastTracked)
 
-  def drawTextList(self, texts, start, height):
-    x, y = start
-    for text, color in texts:
-      self.drawText(text, (x, y), color)
-      y += height
-      continue
-    return
-  
-  def _renderPredictions(self):
-    window = self._display_surf
-    wh = np.array(window.get_size())
-    if self._showPredictions and (0 < len(self._history)):
-      positions = np.array(self._history) * wh[None]
-      positions = positions.astype(np.int32)
-      for prevP, nextP in zip(positions[:-1], positions[1:]):
-        pygame.draw.line(window, Colors.WHITE, prevP, nextP, 2)
-        self.drawObject(tuple(nextP), R=3, color=Colors.PURPLE)
-        continue
-      self.drawObject(tuple(positions[-1]), R=5, color=Colors.RED)
+        # Apply exponential smoothing to prediction
+        if self._lastPrediction:
+            pred_tuple = self._lastPrediction
+            predPos = pred_tuple.prediction.result[0, -1]
+            self._smoothedPrediction = update_prediction_smoothing(
+                self._smoothedPrediction, predPos, GAZE_PREDICTION_SMOOTHING_FACTOR
+            )
 
-      sp = np.multiply(self._smoothedPrediction, wh).astype(np.int32)
-      self.drawObject(tuple(sp), R=5, color=Colors.BLACK)
+        # Update background and current mode
+        self._background.on_tick(delta_t)
+        self._currentMode.on_tick(delta_t)
+        if self._enableIllumination:
+            self._illumination.on_tick(delta_t)
 
-      self.drawText(str(positions), (5, 5), Colors.BLACK)
-      pass
+    def on_render(self, fps: float = 0.0) -> None:
+        """Render current frame.
 
-    if not(self._lastPrediction is None):
-      predicted, data, info = self._lastPrediction
-      # self.drawText(str(info), (5, 35), Colors.BLACK)
-      pass
-    return
-   
-  def run(self):
-    if not self.on_init():
-      self._running = False
-      
-    T = pygame.time.get_ticks()
-    clock = pygame.time.Clock()
-    while self._running:
-      for event in pygame.event.get():
-        self.on_event(event)
+        Args:
+            fps: Frames per second for display (default: 0.0).
+        """
+        window = self._display_surf
+        self._background.on_render(window)
 
-      TMs = (pygame.time.get_ticks() - T) / 1000.0
-      fps = 1.0 / TMs if 0.0 < TMs else 0.0
-      self.on_tick(TMs)
-      self.on_render(fps=fps)
-      T = pygame.time.get_ticks()
-      clock.tick(self._fps)
-      continue
-      
-    pygame.quit()
-    return
+        if self._enableIllumination:
+            self._illumination.on_render(window)
 
-  def drawText(self, text, pos, color, scale=1.0, center=False):
-    textSurface = self._font.render(text, False, color)
-    if 1.0 != scale:
-      textSurface = pygame.transform.scale(
-        textSurface, 
-        (int(textSurface.get_width() * scale), int(textSurface.get_height() * scale))
-      )
+        if self._cameraSurface is not None and self._cameraView is not None:
+            window.blit(self._cameraSurface, tuple(self._cameraView[0].astype(int)))
 
-    if center:
-      pos = np.subtract(pos, np.divide(textSurface.get_size(), 2))
-    
-    pos = tuple(int(x) for x in pos)
-    self._display_surf.blit(textSurface, pos)
-    return
+        if self._eyesSurface is not None and self._eyesView is not None:
+            window.blit(self._eyesSurface, tuple(self._eyesView[0].astype(int)))
 
-  def drawObject(self, pos, R=10, color=Colors.WHITE):
-    # if white - draw target
-    if np.all(np.equal(color, Colors.WHITE)): return self.drawTarget(pos, R=R)
-    
-    pygame.draw.circle(self._display_surf, color, pos, R, 0)
-    return
+        self._currentMode.on_render(window)
+        if self._currentMode.paused:
+            wh = np.array(window.get_size())
+            txt = "Collection paused"
+            draw_text(
+                self._font,
+                window,
+                text=txt,
+                pos=tuple((wh // 2).astype(int)),
+                color=Colors.RED,
+                scale=2.0,
+                center=True,
+            )
 
-  def drawTarget(self, pos, R=10):
-    T = int(time.time())
-    surf = self._display_surf
-    colors = Colors.asList
-    for i in reversed(range(2, R, 2)):
-      color = colors[(i * 7 + T) % len(colors)]
-      pygame.draw.circle(surf, color, pos, i, 0)
-      continue
-    # draw contrast borders
-    pygame.draw.circle(surf, Colors.BLACK, pos, R, 1)
-    pygame.draw.circle(surf, Colors.WHITE, pos, R + 1, 1)
-    pygame.draw.circle(surf, Colors.RED, pos, R + 2 + 3, 3)
-    return
+        render_predictions(
+            self._display_surf,
+            self._font,
+            self._history,
+            self._smoothedPrediction,
+            self._showPredictions,
+            TEXT_POSITION_X,
+            TEXT_POSITION_Y,
+        )
 
-def _modelFromArgs(args):
-  if 'none' == args.model.lower(): return None
-  import json
-  stats = {}
-  with open(os.path.join(args.folder, 'stats.json'), 'r') as f:
-    stats = json.load(f)
+        self._renderInfo(fps=fps)
+        pygame.display.flip()
 
-  # My own ids hardcoded here for simplicity
-  userId = 'ce42c1a9-f4ef-42d6-a219-cf25fad912ed'
-  placeId = 'de0ce61b-2fc0-02f6-efb5-22af447bfb05'
-  screenId = placeId + '/' + 'a28a2ad8-4349-b038-5af8-46a658e82543'
-  return CModelWrapper(
-    timesteps=args.steps,  
-    user=dict(
-      userId=userId,
-      placeId=placeId,
-      screenId=screenId,
-    ),
-    stats=stats,
-    weights=dict(folder=args.folder, postfix=args.model, embeddings=True)
-  )
+    def _renderInfo(self, fps: float) -> None:
+        """Render debug information overlay.
 
-def _predictorFromArgs(args):
-  model = _modelFromArgs(args)
-  if model is None: return CDummyPredictor()
-  return CLearnablePredictor(model=model, fps=args.fps)
+        Args:
+            fps: Frames per second to display.
+        """
+        render_info(
+            self._display_surf,
+            self._font,
+            self._dataset.totalSamples,
+            (
+                self._predictorMaskFace,
+                self._predictorMaskLeftEye,
+                self._predictorMaskRightEye,
+            ),
+            fps,
+            self.WH,
+            self._showFaceMesh,
+            self._faceMesh,
+            self._webcams_list,
+            self._webcam,
+            TEXT_INFO_START_X,
+            TEXT_INFO_START_Y,
+            TEXT_LINE_HEIGHT,
+        )
 
-def main(args):
-  # if webcam a number - convert to int
-  if args.webcam.isdigit(): args.webcam = int(args.webcam)
-  folder = args.folder
-  with CThreadedEyeTracker(webcam=args.webcam) as tracker, CDataset(os.path.join(folder, 'Dataset'), args.steps) as dataset:
-    with _predictorFromArgs(args) as predictor:
-      app = App(
-        tracker, dataset, predictor=predictor.async_infer, fps=args.fps, hasPredictions=predictor.canPredict,
-        current_webcam=args.webcam
-      )
-      app.run()
-    pass
-  return
+    def run(self) -> None:
+        """Run main application loop.
 
-if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--folder', type=str, default=os.path.join(os.path.dirname(__file__), 'Data'))
-  parser.add_argument('--steps', type=int, default=5)
-  # if 'none' - no model will be used
-  parser.add_argument('--model', type=str, default='best')
-  parser.add_argument('--fps', type=int, default=30)
-  parser.add_argument('--webcam', type=str, default='0')
-  main(parser.parse_args())
-  pass
+        Initializes pygame window, processes events, updates state, and renders frames
+        at the configured FPS rate until the application is closed.
+        """
+        if not self.on_init():
+            self._running = False
+
+        T = pygame.time.get_ticks()
+        clock = pygame.time.Clock()
+        while self._running:
+            for event in pygame.event.get():
+                self.on_event(event)
+
+            TMs = (pygame.time.get_ticks() - T) / 1000.0
+            fps = 1.0 / TMs if 0.0 < TMs else 0.0
+            self.on_tick(TMs)
+            self.on_render(fps=fps)
+            T = pygame.time.get_ticks()
+            clock.tick(self._fps)
+
+        pygame.quit()
+
+
+def _modelFromArgs(args: Any) -> Optional[ModelWrapper]:
+    """Create model wrapper from command line arguments.
+
+    Args:
+        args: Command line arguments with model configuration.
+
+    Returns:
+        ModelWrapper instance or None if model is 'none'.
+    """
+    if args.model.lower() == "none":
+        return None
+
+    stats = Utils.read_json(str(Path(args.folder) / "stats.json"))
+
+    return ModelWrapper(
+        timesteps=args.steps,
+        user=dict(
+            userId=DEFAULT_USER_ID,
+            screenId=DEFAULT_SCREEN_ID,
+            cameraId=DEFAULT_CAMERA_ID,
+            monitorId=DEFAULT_MONITOR_ID,
+            placeId=DEFAULT_PLACE_ID,
+        ),
+        stats=stats,
+    )
+
+
+def _predictorFromArgs(args: Any) -> Union[LearnablePredictor, DummyPredictor]:
+    """Create predictor instance from command line arguments.
+
+    Args:
+        args: Command line arguments with predictor configuration.
+
+    Returns:
+        LearnablePredictor or DummyPredictor depending on model availability.
+    """
+    model = _modelFromArgs(args)
+    if model is None:
+        return DummyPredictor()
+    return LearnablePredictor(model=model, fps=args.fps)
+
+
+def main(args: Any) -> None:
+    """Main entry point for eye-tracking UI application.
+
+    Args:
+        args: Command line arguments with configuration parameters.
+    """
+    if args.webcam.isdigit():
+        args.webcam = int(args.webcam)
+    folder = args.folder
+    with ThreadedEyeTracker(webcam=args.webcam) as tracker, Dataset(
+        str(Path(folder) / "Dataset"), args.steps
+    ) as dataset:
+        with _predictorFromArgs(args) as predictor:
+            app = App(
+                tracker=tracker,
+                dataset=dataset,
+                predictor=predictor,
+                fps=args.fps,
+                hasPredictions=predictor.canPredict,
+                current_webcam=args.webcam,
+            )
+            app.run()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--folder", type=str, default=str(Path(__file__).parent / "Data")
+    )
+    parser.add_argument("--steps", type=int, default=5)
+    # if 'none' - no model will be used
+    parser.add_argument("--model", type=str, default="best")
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--webcam", type=str, default="0")
+    main(parser.parse_args())

@@ -1,0 +1,4 @@
+- always use conda myenv
+- see .claude/TESTING.md when deal with a tests
+- see .claude/CODING.md when deal with a code
+- see .claude/DEBUGGING.md when deal with a debugging
