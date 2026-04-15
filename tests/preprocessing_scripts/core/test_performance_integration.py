@@ -54,6 +54,7 @@ class TestMainScriptIntegrationPerformance:
                 drop_zero_deltas = True
                 maxT = 1.0
                 random_seed = 42
+                filter_threshold = 0.1
 
             preprocess_module.main(Args())
             elapsed = time.time() - start_time

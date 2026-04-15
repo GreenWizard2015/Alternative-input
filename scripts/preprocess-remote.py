@@ -168,6 +168,7 @@ def create_filtered_dataset(
 # FILTER WRAPPER INTEGRATION FUNCTIONS
 # ============================================================================
 
+
 @lru_cache(maxsize=1)
 def load_filter_model() -> Optional[FilterWrapper]:
     """Load FilterWrapper model with graceful error handling.
@@ -184,7 +185,10 @@ def load_filter_model() -> Optional[FilterWrapper]:
     logger.info("FilterWrapper model loaded successfully")
     return filter_model
 
-def prepare_filter_batch(dataset: Dict[str, np.ndarray], sample_indices: np.ndarray) -> Dict[str, np.ndarray]:
+
+def prepare_filter_batch(
+    dataset: Dict[str, np.ndarray], sample_indices: np.ndarray
+) -> Dict[str, np.ndarray]:
     """Prepare batch data for FilterWrapper from dataset.
 
     Args:
@@ -215,8 +219,13 @@ def prepare_filter_batch(dataset: Dict[str, np.ndarray], sample_indices: np.ndar
     return batch_data
 
 
-def log_batch_progress(batch_start: int, batch_end: int, total_samples: int,
-                     accepted_count: int, confidences: np.ndarray) -> None:
+def log_batch_progress(
+    batch_start: int,
+    batch_end: int,
+    total_samples: int,
+    accepted_count: int,
+    confidences: np.ndarray,
+) -> None:
     """Log filtering progress with statistics.
 
     Args:
@@ -251,11 +260,18 @@ class FilteringProgressTracker:
         self.confidences = []
         self.batch_times = []
 
-    def update_batch(self, batch_start: int, batch_end: int, accepted_count: int, confidences: np.ndarray, processing_time: float):
+    def update_batch(
+        self,
+        batch_start: int,
+        batch_end: int,
+        accepted_count: int,
+        confidences: np.ndarray,
+        processing_time: float,
+    ):
         """Update progress metrics for a completed batch."""
-        self.processed_samples += (batch_end - batch_start)
+        self.processed_samples += batch_end - batch_start
         self.accepted_samples += accepted_count
-        self.rejected_samples += (batch_end - batch_start - accepted_count)
+        self.rejected_samples += batch_end - batch_start - accepted_count
         self.confidences.extend(confidences)
         self.batch_times.append(processing_time)
 
@@ -263,12 +279,16 @@ class FilteringProgressTracker:
         """Get comprehensive filtering statistics."""
         return {
             "progress_percent": (self.processed_samples / self.total_samples) * 100,
-            "acceptance_rate": self.accepted_samples / self.processed_samples if self.processed_samples > 0 else 0,
+            "acceptance_rate": (
+                self.accepted_samples / self.processed_samples
+                if self.processed_samples > 0
+                else 0
+            ),
             "mean_confidence": np.mean(self.confidences) if self.confidences else 0,
             "std_confidence": np.std(self.confidences) if self.confidences else 0,
             "total_batches": len(self.batch_times),
             "avg_batch_time": np.mean(self.batch_times) if self.batch_times else 0,
-            "estimated_remaining_time": self._estimate_remaining_time()
+            "estimated_remaining_time": self._estimate_remaining_time(),
         }
 
     def _estimate_remaining_time(self):
@@ -281,8 +301,12 @@ class FilteringProgressTracker:
         return remaining_samples * avg_time_per_sample
 
 
-def apply_filter_wrapper_filter(dataset: Dict[str, np.ndarray], sample_indices: np.ndarray,
-                               threshold: float, batch_size: int = DEFAULT_FILTER_BATCH_SIZE) -> np.ndarray:
+def apply_filter_wrapper_filter(
+    dataset: Dict[str, np.ndarray],
+    sample_indices: np.ndarray,
+    threshold: float,
+    batch_size: int = DEFAULT_FILTER_BATCH_SIZE,
+) -> np.ndarray:
     """Apply FilterWrapper model to filter samples in batches with progress logging.
 
     Args:
@@ -312,7 +336,9 @@ def apply_filter_wrapper_filter(dataset: Dict[str, np.ndarray], sample_indices: 
     # Initialize FilterWrapper with error handling
     filter_model = load_filter_model()
     if filter_model is None:
-        logger.warning("FilterWrapper model not available, returning all unfiltered samples")
+        logger.warning(
+            "FilterWrapper model not available, returning all unfiltered samples"
+        )
         return sample_indices
 
     # Process in batches with progress tracking
@@ -320,7 +346,9 @@ def apply_filter_wrapper_filter(dataset: Dict[str, np.ndarray], sample_indices: 
     total_samples = len(sample_indices)
     progress_tracker = FilteringProgressTracker(total_samples)
 
-    logger.info(f"Starting FilterWrapper filtering on {total_samples} samples with threshold {threshold}")
+    logger.info(
+        f"Starting FilterWrapper filtering on {total_samples} samples with threshold {threshold}"
+    )
 
     for batch_start in range(0, total_samples, batch_size):
         batch_end = min(batch_start + batch_size, total_samples)
@@ -336,18 +364,25 @@ def apply_filter_wrapper_filter(dataset: Dict[str, np.ndarray], sample_indices: 
         # Apply threshold: accept low confidence samples (quality control)
         # Lower confidence indicates the model is uncertain about quality, so we keep those
         accepted_mask = confidences.flatten() <= threshold
-        accepted_samples = np.array(batch_indices)[accepted_mask] if len(batch_indices) > 0 else np.array([])
+        accepted_samples = (
+            np.array(batch_indices)[accepted_mask]
+            if len(batch_indices) > 0
+            else np.array([])
+        )
         filtered_indices.extend(accepted_samples)
 
         # Calculate processing time
         processing_time = time.time() - processing_start
 
         # Update progress tracker
-        progress_tracker.update_batch(batch_start, batch_end, len(accepted_samples), confidences, processing_time)
+        progress_tracker.update_batch(
+            batch_start, batch_end, len(accepted_samples), confidences, processing_time
+        )
 
         # Log progress
-        log_batch_progress(batch_start, batch_end, total_samples,
-                            len(accepted_samples), confidences)
+        log_batch_progress(
+            batch_start, batch_end, total_samples, len(accepted_samples), confidences
+        )
 
     # Log final statistics
     stats = progress_tracker.get_statistics()
@@ -400,7 +435,9 @@ def processFolder(
     if maxT <= 0:
         raise ValueError(f"maxT must be positive, got {maxT}")
     if filter_threshold is not None and (filter_threshold < 0 or filter_threshold > 1):
-        raise ValueError(f"filter_threshold must be between 0 and 1, got {filter_threshold}")
+        raise ValueError(
+            f"filter_threshold must be between 0 and 1, got {filter_threshold}"
+        )
 
     logger.info(f"Processing folder: {folder}")
     stats: Dict[str, List[Any]] = {
@@ -464,7 +501,9 @@ def processFolder(
     if filter_threshold is not None:
         # Check if dataset has required eye data for filtering
         if "left eye" not in dataset or "right eye" not in dataset:
-            logger.warning("Dataset missing eye data required for filtering, skipping filtering")
+            logger.warning(
+                "Dataset missing eye data required for filtering, skipping filtering"
+            )
         else:
             logger.info("Applying FilterWrapper filtering...")
             original_count = len(all_valid)
@@ -472,13 +511,19 @@ def processFolder(
                 dataset, all_valid, filter_threshold
             )
             remaining_count = len(all_valid)
-            filtering_rate = (remaining_count / original_count) * 100 if original_count > 0 else 0
+            filtering_rate = (
+                (remaining_count / original_count) * 100 if original_count > 0 else 0
+            )
 
-            logger.info(f"Filtering complete: {remaining_count}/{original_count} samples remaining "
-                        f"({filtering_rate:.1f}% retention)")
+            logger.info(
+                f"Filtering complete: {remaining_count}/{original_count} samples remaining "
+                f"({filtering_rate:.1f}% retention)"
+            )
 
             if len(all_valid) == 0:
-                logger.warning("No valid samples found after filtering! Dataset will be skipped.")
+                logger.warning(
+                    "No valid samples found after filtering! Dataset will be skipped."
+                )
                 return 0, 0, True, {}
 
     # ========== STEP 1: Final validation after filtering ==========
@@ -496,7 +541,9 @@ def processFolder(
 
     # Early check: If either split would have zero samples, skip processing entirely
     if len(test_samples) == 0 or (len(all_valid) - len(test_samples)) == 0:
-        logger.warning(f"Dataset would have zero samples in either train ({len(all_valid) - len(test_samples)}) or test ({len(test_samples)}) split. Skipping entire processing...")
+        logger.warning(
+            f"Dataset would have zero samples in either train ({len(all_valid) - len(test_samples)}) or test ({len(test_samples)}) split. Skipping entire processing..."
+        )
         return 0, 0, True, {}
 
     # Filter test samples to ensure minimum spacing (no overlaps after frame expansion)
@@ -509,12 +556,16 @@ def processFolder(
         test_samples = np.array(filtered_test, dtype=np.int64)
 
     if len(test_samples) == 0:
-        logger.warning(f"No valid test samples found after filtering! Test ratio: {testRatio}, minimum frames: {minimumFrames}. Dataset will be skipped.")
+        logger.warning(
+            f"No valid test samples found after filtering! Test ratio: {testRatio}, minimum frames: {minimumFrames}. Dataset will be skipped."
+        )
         return 0, 0, True, {}
 
     train_samples = np.sort(list(set(filtered.used_samples()) - set(test_samples)))
     if len(train_samples) == 0:
-        logger.warning("No valid train samples found after filtering! Dataset will be skipped.")
+        logger.warning(
+            "No valid train samples found after filtering! Dataset will be skipped."
+        )
         return 0, 0, True, {}
 
     logger.info(
@@ -544,7 +595,9 @@ def processFolder(
 
     # ========== STEP 5: Save datasets ==========
     if (0 == len(train_frames)) or (0 == len(test_frames)):
-        logger.warning(f"No training or testing frames found! Train frames: {len(train_frames)}, Test frames: {len(test_frames)}. Dataset will be skipped.")
+        logger.warning(
+            f"No training or testing frames found! Train frames: {len(train_frames)}, Test frames: {len(test_frames)}. Dataset will be skipped."
+        )
         return 0, 0, True, None
 
     def saveSubset(filename: str, idx: np.ndarray, sample_count: int) -> int:
@@ -710,7 +763,9 @@ def main(args: argparse.Namespace) -> None:
             filter_threshold=args.filter_threshold,
         )
         if isSkipped:
-            logger.warning(f"Ignoring dataset: {userId}/{screenId}/{cameraId}/{monitorId}/{placeId} (insufficient valid samples or zero samples in train/test split)")
+            logger.warning(
+                f"Ignoring dataset: {userId}/{screenId}/{cameraId}/{monitorId}/{placeId} (insufficient valid samples or zero samples in train/test split)"
+            )
             # Add ignored folders to blacklist (store actual IDs)
             stats["blacklist"].append([userId, screenId, cameraId, monitorId, placeId])
         else:
@@ -788,7 +843,7 @@ if __name__ == "__main__":
         "--filter-threshold",
         type=float,
         default=None,
-        help="Confidence threshold for FilterWrapper filtering (apply filtering if specified, accept samples with confidence <= threshold, default: disabled)"
+        help="Confidence threshold for FilterWrapper filtering (apply filtering if specified, accept samples with confidence <= threshold, default: disabled)",
     )
 
     args = parser.parse_args()

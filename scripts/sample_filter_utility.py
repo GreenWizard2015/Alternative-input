@@ -1029,7 +1029,6 @@ class SampleFilterUtility:
             self.current_frame_idx = 0
             self._update_autoselection()
             logger.info("Starting from frame 0 in current dataset")
-        
 
     def run(self):
         """Run the filtering application."""
