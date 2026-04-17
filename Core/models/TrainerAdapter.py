@@ -154,12 +154,12 @@ class TrainerAdapter:
         aux_losses = set(computed_losses.keys())
         aux_losses.discard("teacher_result")
 
-        teacher_mask = tf.where(
-            computed_losses["teacher_result"] < target_student_loss, 1.0, 0.0
+        teacher_mask = tf.stop_gradient(
+            tf.where(computed_losses["teacher_result"] < target_student_loss, 1.0, 0.0)
         )
         teacher_acc = tf.reduce_mean(teacher_mask)
         computed_losses["teacher_acc"] = teacher_acc
-        loss_weight *= teacher_mask + teacher_acc
+        loss_weight *= teacher_mask + teacher_acc + 1.0
 
         loss_weight = loss_weight / float(len(aux_losses))
         for name in aux_losses:

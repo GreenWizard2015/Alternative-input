@@ -79,13 +79,14 @@ def _transfer_model_weights(teacher, student):
 
 
 def _create_wrapper(
-    args, folder, scale, model_prefix, mode, weights, embeddings, force
+    args, folder, scale, model_prefix, mode, weights, embeddings, force, cache_id
 ):
     wrapper_args = {
         **args,
         "scale_mult": scale,
         "model": f"{model_prefix}-{scale:.1f}",
         "mode": mode,
+        "cache_id": cache_id,
     }
     # Load weights if provided
     weights_res = None
@@ -103,6 +104,26 @@ def _create_wrapper(
     return ModelWrapper(**wrapper_args), weights_res
 
 
+def _parse_teacher_clones(teacher_clones: str, teacher_count: int) -> List[int]:
+    """Parse teacher clones string into list of clone counts per teacher.
+
+    Args:
+        teacher_clones: String with clone counts, can be single number or comma-separated list
+
+    Returns:
+        List of clone counts for each teacher
+    """
+    if not teacher_clones:
+        teacher_clones = "1"
+
+    # Parse single number or comma-separated list
+    clone_parts = [int(x.strip()) for x in teacher_clones.split(",")]
+    if len(clone_parts) == 1:
+        # Single number applies to all teachers
+        return clone_parts * teacher_count
+    return clone_parts
+
+
 def _teachers_from(
     args: argparse.Namespace, stats: dict, folder: Path
 ) -> List[ModelWrapper]:
@@ -112,19 +133,40 @@ def _teachers_from(
     assert len(teacher_scales) == len(teacher_weights)
 
     teacher_wrappers = []
-    for weight, scale in zip(teacher_weights, teacher_scales):
+    teacher_wrappers_clones = []
+    # Parse teacher clones
+    teacher_clones = _parse_teacher_clones(args.teacher_clones, len(teacher_weights))
+    assert len(teacher_clones) == len(teacher_weights)
+
+    args1 = dict(
+        args=wrapper_args,
+        folder=str(folder),
+        model_prefix="teacher",
+        mode="full",
+        embeddings=True,
+        force=args.force,
+    )
+    for idx, (weight, scale, clones) in enumerate(
+        zip(teacher_weights, teacher_scales, teacher_clones)
+    ):
         teacher_wrapper, _ = _create_wrapper(
-            wrapper_args,
-            folder=str(folder),
+            **args1,
+            cache_id=f"teacher-{idx}",
             scale=float(scale),
-            model_prefix="teacher",
-            mode="full",
             weights=weight,
-            embeddings=True,
-            force=args.force,
         )
+
         teacher_wrappers.append(teacher_wrapper)
-    return teacher_wrappers
+        for _ in range(clones - 1):
+            teacher_wrapper, _ = _create_wrapper(
+                **args1,
+                cache_id=f"teacher-{idx}",
+                scale=float(scale),
+                weights=weight,
+            )
+            teacher_wrappers_clones.append(teacher_wrapper)
+
+    return teacher_wrappers + teacher_wrappers_clones
 
 
 def _student_from(args: argparse.Namespace, stats: dict, folder: Path) -> ModelWrapper:
@@ -309,6 +351,12 @@ if __name__ == "__main__":
         "Format: 'postfix' or 'model/postfix'. "
         "If provided, loads weights into frozen teacher for distillation. "
         "Weights must match --teacher-scale dimensions.",
+    )
+    parser.add_argument(
+        "--teacher-clones",
+        type=str,
+        default="",
+        help="How many times clone pre-trained teacher model. Can be one number for all or comma-separated list.",
     )
     parser.add_argument(
         "--student-index",

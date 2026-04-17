@@ -22,7 +22,6 @@ logger = get_logger(__name__)
 
 # Constants for progress display
 DISPLAY_FREQUENCY = 10  # Display summary every N iterations
-LOSS_WINDOW = 100  # Number of recent losses to average for display
 CLEAR_SCREEN_UNIX = "\033[2J\033[H"  # ANSI escape codes: clear screen and move to home
 CLEAR_SCREEN_WIN = "\033c"  # Windows clear screen escape sequence
 
@@ -182,11 +181,11 @@ def create_training_loop(model: Any, dataset: Any) -> Callable:
             # Display summary every DISPLAY_FREQUENCY iterations
             if ((step + 1) % DISPLAY_FREQUENCY == 0) or step == 0:
                 loss_items = [
-                    f"{k}=%.4f" % np.mean(v[-LOSS_WINDOW:])
-                    for k, v in sorted(history.items())
+                    f"{k}=%.4f" % np.mean(v) for k, v in sorted(history.items())
                 ]
                 format_progress(step, loss_items)
 
+        format_progress(total_samples, loss_items)
         dataset.on_epoch_end()
 
     return training_step

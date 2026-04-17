@@ -131,9 +131,13 @@ class ModelStudentTrainer:
 
     def _gather_teacher_outputs(self, x) -> List[PredictionOutput]:
         """Gather predictions from all teacher models."""
-        res = [
-            teacher.call(inputs=x, training=False) for teacher in self._teachers_models
-        ]
+        by_cache_id = {}
+        for teacher in self._teachers_models:
+            cache_id = teacher.cache_id
+            if cache_id not in by_cache_id:
+                by_cache_id[cache_id] = teacher.call(inputs=x, training=False)
+
+        res = [by_cache_id[teacher.cache_id] for teacher in self._teachers_models]
         return [
             PredictionOutput(
                 intermediate_latents=tf.stop_gradient(

@@ -70,6 +70,7 @@ class ModelWrapper(tf.keras.Model):
         model: str = "simple",
         user: Optional[Dict[str, str]] = None,
         predictor_mode: str = "result",
+        cache_id: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize model wrapper.
@@ -121,6 +122,7 @@ class ModelWrapper(tf.keras.Model):
 
         # Store stats for dynamic passing
         self._stats = stats
+        self._cache_id = cache_id
 
         # Compute vocab from stats (moved from _get_embeddings)
         # Only include HIERARCHY_LEVELS keys to avoid passing extra keys like "blacklist"
@@ -653,3 +655,7 @@ class ModelWrapper(tf.keras.Model):
 
     def reset_embeddings(self):
         self._table.reset_embeddings()
+
+    @property
+    def cache_id(self):
+        return self._cache_id
