@@ -25,50 +25,35 @@ class TrainerAdapter:
     _intermediate: AdapterMLP = None
     _final: AdapterMLP = None
 
+    def __init__(self, exclude):
+        super().__init__()
+        self._exclude = exclude
+
     def _create_adapters_if_needed(
         self, student_latent_dim, teacher_latent_dim
     ) -> None:
-        if self._intermediate:
-            return
-        self._intermediate = AdapterMLP(
-            student_dim=student_latent_dim,
-            teacher_dim=teacher_latent_dim,
-            name="DistillationAdapterIntermediate",
-        )
+        if not self._intermediate and ("intermediate" not in self._exclude):
+            self._intermediate = AdapterMLP(
+                student_dim=student_latent_dim,
+                teacher_dim=teacher_latent_dim,
+                name="DistillationAdapterIntermediate",
+            )
+            logger.info(
+                f"Created adapters: student_dim={student_latent_dim}, "
+                f"teacher_dim={teacher_latent_dim}"
+            )
 
-        self._final = AdapterMLP(
-            student_dim=student_latent_dim,
-            teacher_dim=teacher_latent_dim,
-            name="DistillationAdapterFinal",
-        )
+        if not self._final and ("final" not in self._exclude):
+            self._final = AdapterMLP(
+                student_dim=student_latent_dim,
+                teacher_dim=teacher_latent_dim,
+                name="DistillationAdapterFinal",
+            )
 
-        logger.info(
-            f"Created adapters: student_dim={student_latent_dim}, "
-            f"teacher_dim={teacher_latent_dim}"
-        )
-
-    def _preprocess_student_outputs(self, student: PredictionOutput):
-        """Preprocess student outputs by projecting to teacher dimension space via adapters."""
-        # Project student latents to teacher dimension space via adapters
-        adapted_to_teacher_intermediate = self._intermediate(
-            NNU.normalize_std(student.intermediate_latents),
-            training=True,
-        )
-        adapted_to_teacher_final = self._final(
-            NNU.normalize_std(student.latents),
-            training=True,
-        )
-        return (
-            NNU.normalize_std(adapted_to_teacher_intermediate),
-            NNU.normalize_std(adapted_to_teacher_final),
-        )
-
-    def _preprocess_teacher_outputs(self, teacher: PredictionOutput):
-        """Preprocess teacher outputs by normalizing latents."""
-        return (
-            NNU.normalize_std(teacher.intermediate_latents),
-            NNU.normalize_std(teacher.latents),
-        )
+            logger.info(
+                f"Created adapters: student_dim={student_latent_dim}, "
+                f"teacher_dim={teacher_latent_dim}"
+            )
 
     def _process_distil(self, student, teacher):
         """Process student and teacher outputs through adapters.
@@ -84,10 +69,28 @@ class TrainerAdapter:
             student_latent_dim=student.latents.shape[-1],
             teacher_latent_dim=teacher.latents.shape[-1],
         )
-        return (
-            self._preprocess_student_outputs(student),
-            self._preprocess_teacher_outputs(teacher),
-        )
+
+        latents_student = {
+            "intermediate": student.intermediate_latents,
+            "final": student.latents,
+        }
+        latents_teacher = {
+            "intermediate": teacher.intermediate_latents,
+            "final": teacher.latents,
+        }
+
+        resX = {}
+        resY = {}
+        for name, adapter in [
+            ("intermediate", self._intermediate),
+            ("final", self._final),
+        ]:
+            if adapter:
+                resY[f"adapted_{name}"] = NNU.normalize_std(latents_teacher[name])
+                resX[f"adapted_{name}"] = NNU.normalize_std(
+                    adapter(NNU.normalize_std(latents_student[name]), training=True)
+                )
+        return (resX, resY)
 
     @property
     def trainable_variables(self):
@@ -109,24 +112,19 @@ class TrainerAdapter:
         y,
         target,
     ):
-        adapted_l, teacher_l = self._process_distil(student=student, teacher=teacher)
-        adapted_to_teacher_intermediate, adapted_to_teacher_final = adapted_l
-        teacher_intermediate_latents, teacher_latents = teacher_l
-
+        adapted_losses, teacher_losses = self._process_distil(
+            student=student, teacher=teacher
+        )
         return (
             {
                 **predictions,
                 "teacher_result": teacher.result,
-                # student->teacher
-                "adapted_intermediate": adapted_to_teacher_intermediate,
-                "adapted_final": adapted_to_teacher_final,
+                **adapted_losses,
             },
             {
                 **y,
                 "teacher_result": target,
-                # student->teacher
-                "adapted_intermediate": teacher_intermediate_latents,
-                "adapted_final": teacher_latents,
+                **teacher_losses,
             },
         )
 

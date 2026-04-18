@@ -77,6 +77,7 @@ class ModelStudentTrainer:
         micro_batch_size: Optional[int] = 16,
         feature_match_loss_weight: float = 0.5,
         weights: Optional[Dict[str, Any]] = None,
+        exclude=None,
     ) -> None:
         """Initialize student model trainer with teacher guidance.
 
@@ -102,13 +103,16 @@ class ModelStudentTrainer:
                 f"feature_match_loss_weight must be 0.0 <= {feature_match_loss_weight}"
             )
 
+        self._exclude = exclude or []
         self._model_wrapper = model_wrapper
         self._teachers_models = teachers_models
         self._micro_batch_size = micro_batch_size
         self._feature_match_loss_weight = feature_match_loss_weight
 
         # Create adapters for latent space adaptation (will be created during first call)
-        self._adapters = [TrainerAdapter() for _ in range(len(teachers_models))]
+        self._adapters = [
+            TrainerAdapter(exclude=self._exclude) for _ in range(len(teachers_models))
+        ]
         self._residual_intermediate = None
         self._residual_final = None
         self._grl = GradientReversalLayer()
@@ -195,17 +199,17 @@ class ModelStudentTrainer:
         return {f"{idx}_{k}": v for k, v in adapted_loss.items()}
 
     def _create_residual_if_needed(self, dim) -> None:
-        if self._residual_final:
-            return
-        self._residual_intermediate = ResidualAE(
-            dim,
-            name="ResidualIntermediate",
-        )
+        if not self._residual_intermediate and ("intermediate" not in self._exclude):
+            self._residual_intermediate = ResidualAE(
+                dim,
+                name="ResidualIntermediate",
+            )
 
-        self._residual_final = ResidualAE(
-            dim,
-            name="ResidualFinal",
-        )
+        if not self._residual_final and ("final" not in self._exclude):
+            self._residual_final = ResidualAE(
+                dim,
+                name="ResidualFinal",
+            )
 
     def _calc_regularization(self, v):
         mean = tf.abs(tf.reduce_mean(v, axis=-1))
@@ -316,11 +320,12 @@ class ModelStudentTrainer:
             ),
             (student_output.latents, "final", self._residual_final),
         ]:
-            losses[f"{name}_reg"] = self._calc_regularization(v) * 1e-1
-            # calc InfoNCE
-            losses[f"{name}_ince"] = (
-                self._calc_nce(v, N=N, latent_subdim=latent_subdim, ae=ae) * 1e-1
-            )
+            if name not in self._exclude:
+                losses[f"{name}_reg"] = self._calc_regularization(v) * 1e-1
+                # calc InfoNCE
+                losses[f"{name}_ince"] = (
+                    self._calc_nce(v, N=N, latent_subdim=latent_subdim, ae=ae) * 1e-1
+                )
 
         return {k: tf.reduce_mean(v) for k, v in losses.items()}
 
@@ -449,8 +454,10 @@ class ModelStudentTrainer:
         for adapter in self._adapters:
             trainable_vars.extend(adapter.trainable_variables)
 
-        trainable_vars.extend(self._residual_intermediate.trainable_variables)
-        trainable_vars.extend(self._residual_final.trainable_variables)
+        if self._residual_intermediate:
+            trainable_vars.extend(self._residual_intermediate.trainable_variables)
+        if self._residual_final:
+            trainable_vars.extend(self._residual_final.trainable_variables)
         return trainable_vars
 
     def save(self, folder: str = "models", postfix: str = "") -> None:
@@ -483,8 +490,10 @@ class ModelStudentTrainer:
         for idx, adapter in enumerate(self._adapters):
             adapter.save_npz(model_path, idx)
 
-        self._residual_intermediate.save_npz(f"{model_path}/residual-intermediate")
-        self._residual_final.save_npz(f"{model_path}/residual-final")
+        if self._residual_intermediate:
+            self._residual_intermediate.save_npz(f"{model_path}/residual-intermediate")
+        if self._residual_final:
+            self._residual_final.save_npz(f"{model_path}/residual-final")
 
     def load(
         self,
@@ -519,9 +528,11 @@ class ModelStudentTrainer:
         for idx, adapter in enumerate(self._adapters):
             adapter.load_npz(model_path, idx)
 
-        self._residual_intermediate.load_npz(
-            f"{model_path}/residual-intermediate", force=True
-        )
-        self._residual_final.load_npz(f"{model_path}/residual-final", force=True)
+        if self._residual_intermediate:
+            self._residual_intermediate.load_npz(
+                f"{model_path}/residual-intermediate", force=True
+            )
+        if self._residual_final:
+            self._residual_final.load_npz(f"{model_path}/residual-final", force=True)
 
         logger.info(f"Loaded adapters from {model_path}")

@@ -224,11 +224,17 @@ def _trainer_from(
     if args.no_embeddings:
         student_wrapper.reset_embeddings()
 
+    exclude = []
+    if args.exclude:
+        assert args.exclude in ["final", "intermediate"]
+        exclude = [args.exclude]
+
     return ModelStudentTrainer(
         model_wrapper=student_wrapper,
         teachers_models=teacher_wrappers,
         feature_match_loss_weight=args.feature_match_weight,
         weights=student_weights,
+        exclude=exclude,
     )
 
 
@@ -389,6 +395,12 @@ if __name__ == "__main__":
         default=None,
         help="Test batch size for sub-batching. If None, use full npz batch sizes. "
         "Useful for memory management or performance optimization.",
+    )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        default=None,
+        help="Excluded from distillation parts. Can be 'final' or 'intermediate'.",
     )
     args = parser.parse_args()
     main(args)
