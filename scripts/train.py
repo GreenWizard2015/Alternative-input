@@ -114,7 +114,7 @@ def _parse_teacher_clones(teacher_clones: str, teacher_count: int) -> List[int]:
         List of clone counts for each teacher
     """
     if not teacher_clones:
-        teacher_clones = "1"
+        teacher_clones = "0"
 
     # Parse single number or comma-separated list
     clone_parts = [int(x.strip()) for x in teacher_clones.split(",")]
@@ -156,7 +156,7 @@ def _teachers_from(
         model_params = model_args(
             cache_id=f"teacher-{idx}", scale=scale, weights=weight
         )
-        for clone_idx in range(clones):
+        for clone_idx in range(clones + 1):
             teacher_wrapper, _ = _create_wrapper(**model_params)
             wrappers[clone_idx].append(teacher_wrapper)
 
