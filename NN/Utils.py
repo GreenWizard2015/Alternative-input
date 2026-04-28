@@ -128,3 +128,16 @@ def normalize_std(x):
     mean = tf.reduce_mean(x, axis=-1, keepdims=True)
     std = tf.math.reduce_std(x, axis=-1, keepdims=True) + 1e-8
     return (x - mean) / std
+
+
+def structured_latent_dropout(latents, training, min_rate=0.1, max_rate=0.9):
+    if not training:
+        return latents
+
+    shp = tf.shape(latents)
+    rates = tf.linspace(max_rate, min_rate, shp[-1] - 1)
+    rates = tf.concat([tf.constant([1.0]), rates], axis=-1)
+    rates = tf.broadcast_to(rates, shp)
+    mask = tf.random.uniform(tf.shape(rates[..., :1])) < rates
+    tf.debugging.assert_equal(tf.shape(mask), tf.shape(latents))
+    return tf.where(mask, latents, 0.0)

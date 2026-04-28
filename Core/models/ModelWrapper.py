@@ -23,6 +23,7 @@ from NN.models.EmbeddingsProcessor import EmbeddingsProcessor
 from Core.logging_config import get_logger
 from NN.models.GazePredictionModel import GazePredictionModel
 from NN.models.PredictorBlock import PredictorBlock
+from NN.Utils import structured_latent_dropout
 
 from Core import Utils
 from Core.Constants import (
@@ -340,7 +341,10 @@ class ModelWrapper(tf.keras.Model):
         latent_final = model_output["final_latent"]
 
         # Use final latent to generate gaze predictions
-        predictor_output = self._predictor(latent_final, training=training)
+        predictor_output = self._predictor(
+            structured_latent_dropout(latent_final, training=training),
+            training=training,
+        )
         # PredictorBlock returns {"result": points, ...other outputs}
         result = predictor_output["result"]
 

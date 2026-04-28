@@ -132,41 +132,38 @@ def _teachers_from(
     teacher_weights = list(args.teacher_weights.split(","))
     assert len(teacher_scales) == len(teacher_weights)
 
-    teacher_wrappers = []
-    teacher_wrappers_clones = []
     # Parse teacher clones
     teacher_clones = _parse_teacher_clones(args.teacher_clones, len(teacher_weights))
     assert len(teacher_clones) == len(teacher_weights)
 
-    args1 = dict(
-        args=wrapper_args,
-        folder=str(folder),
-        model_prefix="teacher",
-        mode="full",
-        embeddings=True,
-        force=args.force,
-    )
+    def model_args(cache_id, scale, weights, model_prefix="teacher"):
+        return dict(
+            args=wrapper_args,
+            folder=str(folder),
+            model_prefix=model_prefix,
+            mode="full",
+            embeddings=True,
+            force=args.force,
+            cache_id=cache_id,
+            scale=float(scale),
+            weights=weights,
+        )
+
+    wrappers = [[] for _ in range(max(teacher_clones))]
     for idx, (weight, scale, clones) in enumerate(
         zip(teacher_weights, teacher_scales, teacher_clones)
     ):
-        teacher_wrapper, _ = _create_wrapper(
-            **args1,
-            cache_id=f"teacher-{idx}",
-            scale=float(scale),
-            weights=weight,
+        model_params = model_args(
+            cache_id=f"teacher-{idx}", scale=scale, weights=weight
         )
+        for clone_idx in range(clones):
+            teacher_wrapper, _ = _create_wrapper(**model_params)
+            wrappers[clone_idx].append(teacher_wrapper)
 
-        teacher_wrappers.append(teacher_wrapper)
-        for _ in range(clones - 1):
-            teacher_wrapper, _ = _create_wrapper(
-                **args1,
-                cache_id=f"teacher-{idx}",
-                scale=float(scale),
-                weights=weight,
-            )
-            teacher_wrappers_clones.append(teacher_wrapper)
-
-    return teacher_wrappers + teacher_wrappers_clones
+    res = []
+    for lst in wrappers:
+        res.extend(lst)
+    return res
 
 
 def _student_from(args: argparse.Namespace, stats: dict, folder: Path) -> ModelWrapper:
