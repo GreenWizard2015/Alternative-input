@@ -149,7 +149,7 @@ def _teachers_from(
             weights=weights,
         )
 
-    wrappers = [[] for _ in range(max(teacher_clones))]
+    wrappers = [[] for _ in range(1 + max(teacher_clones))]
     for idx, (weight, scale, clones) in enumerate(
         zip(teacher_weights, teacher_scales, teacher_clones)
     ):
