@@ -253,6 +253,21 @@ class ModelStudentTrainer:
 
         return loss
 
+    def _regularization_targets(self, student_output):
+        self._create_residual_if_needed(student_output.latents.shape[-1])
+        targets = []
+        if self._residual_intermediate:
+            latents = student_output.intermediate_latents
+            ae = self._residual_intermediate
+            targets.append((latents, "intermediate", ae))
+
+        if self._residual_final:
+            latents = student_output.latents
+            ae = self._residual_final
+            targets.append((latents, "final", ae))
+
+        return targets
+
     @tf.function
     def _train_on(
         self,
@@ -311,21 +326,12 @@ class ModelStudentTrainer:
             losses = {**losses, **adapted_loss}
 
         # latents regularization and InfoNCE
-        self._create_residual_if_needed(student_output.latents.shape[-1])
-        for v, name, ae in [
-            (
-                student_output.intermediate_latents,
-                "intermediate",
-                self._residual_intermediate,
-            ),
-            (student_output.latents, "final", self._residual_final),
-        ]:
-            if name not in self._exclude:
-                losses[f"{name}_reg"] = self._calc_regularization(v) * 1e-1
-                # calc InfoNCE
-                losses[f"{name}_ince"] = (
-                    self._calc_nce(v, N=N, latent_subdim=latent_subdim, ae=ae) * 1e-1
-                )
+        for v, name, ae in self._regularization_targets(student_output):
+            losses[f"{name}_reg"] = self._calc_regularization(v) * 1e-1
+            # calc InfoNCE
+            losses[f"{name}_ince"] = (
+                self._calc_nce(v, N=N, latent_subdim=latent_subdim, ae=ae) * 1e-1
+            )
 
         return {k: tf.reduce_mean(v) for k, v in losses.items()}
 

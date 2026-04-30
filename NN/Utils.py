@@ -135,9 +135,12 @@ def structured_latent_dropout(latents, training, min_rate=0.1, max_rate=0.9):
         return latents
 
     shp = tf.shape(latents)
-    rates = tf.linspace(max_rate, min_rate, shp[-1] - 1)
-    rates = tf.concat([tf.constant([1.0]), rates], axis=-1)
-    rates = tf.broadcast_to(rates, shp)
-    mask = tf.random.uniform(tf.shape(rates[..., :1])) < rates
+    keep_rates = tf.linspace(max_rate, min_rate, shp[-1] - 1)
+    keep_rates = tf.concat([tf.constant([1.0]), keep_rates], axis=-1)
+    keep_rates = tf.broadcast_to(keep_rates, shp)
+
+    shared_seed = tf.random.uniform(tf.shape(keep_rates[..., :1]))
+    mask = tf.cast(shared_seed < keep_rates, latents.dtype)
     tf.debugging.assert_equal(tf.shape(mask), tf.shape(latents))
-    return tf.where(mask, latents, 0.0)
+    # inverted dropout scaling
+    return latents * mask / keep_rates
