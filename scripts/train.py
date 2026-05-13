@@ -104,26 +104,6 @@ def _create_wrapper(
     return ModelWrapper(**wrapper_args), weights_res
 
 
-def _parse_teacher_clones(teacher_clones: str, teacher_count: int) -> List[int]:
-    """Parse teacher clones string into list of clone counts per teacher.
-
-    Args:
-        teacher_clones: String with clone counts, can be single number or comma-separated list
-
-    Returns:
-        List of clone counts for each teacher
-    """
-    if not teacher_clones:
-        teacher_clones = "0"
-
-    # Parse single number or comma-separated list
-    clone_parts = [int(x.strip()) for x in teacher_clones.split(",")]
-    if len(clone_parts) == 1:
-        # Single number applies to all teachers
-        return clone_parts * teacher_count
-    return clone_parts
-
-
 def _teachers_from(
     args: argparse.Namespace, stats: dict, folder: Path
 ) -> List[ModelWrapper]:
@@ -131,10 +111,6 @@ def _teachers_from(
     teacher_scales = list(args.teacher_scale.split(","))
     teacher_weights = list(args.teacher_weights.split(","))
     assert len(teacher_scales) == len(teacher_weights)
-
-    # Parse teacher clones
-    teacher_clones = _parse_teacher_clones(args.teacher_clones, len(teacher_weights))
-    assert len(teacher_clones) == len(teacher_weights)
 
     def model_args(cache_id, scale, weights, model_prefix="teacher"):
         return dict(
@@ -149,21 +125,19 @@ def _teachers_from(
             weights=weights,
         )
 
-    wrappers = [[] for _ in range(1 + max(teacher_clones))]
-    for idx, (weight, scale, clones) in enumerate(
-        zip(teacher_weights, teacher_scales, teacher_clones)
-    ):
+    wrappers = []
+    wrappers_weights = []
+    for idx, (weight, scale) in enumerate(zip(teacher_weights, teacher_scales)):
+        if not scale.strip():  # Handle empty string case
+            scale = "1.0"  # Use default scale
         model_params = model_args(
             cache_id=f"teacher-{idx}", scale=scale, weights=weight
         )
-        for clone_idx in range(clones + 1):
-            teacher_wrapper, _ = _create_wrapper(**model_params)
-            wrappers[clone_idx].append(teacher_wrapper)
+        teacher_wrapper, weights = _create_wrapper(**model_params)
+        wrappers_weights.append(weights)
+        wrappers.append(teacher_wrapper)
 
-    res = []
-    for lst in wrappers:
-        res.extend(lst)
-    return res
+    return wrappers, wrappers_weights
 
 
 def _student_from(args: argparse.Namespace, stats: dict, folder: Path) -> ModelWrapper:
@@ -207,16 +181,22 @@ def _trainer_from(
         >>> trainer = _trainer_from(args, stats, folder=Path("data"))
         >>> trainer.summary()
     """
-    teacher_wrappers = _teachers_from(args, stats, folder)
+    teacher_wrappers, wrappers_weights = _teachers_from(args, stats, folder)
     student_weights = None
     if args.student_index is not None:
         student_wrapper = teacher_wrappers.pop(args.student_index)
+        student_weights = wrappers_weights.pop(args.student_index)
     else:
         student_wrapper, student_weights = _student_from(
             args, stats=stats, folder=folder
         )
         if student_weights is None and (0 < len(teacher_wrappers)):
             _transfer_model_weights(teacher_wrappers[0], student_wrapper)
+
+    teacher_model = student_wrapper
+    if args.self_distill:
+        teacher_model = student_wrapper.clone()
+        teacher_wrappers.append(teacher_model)
 
     if args.no_embeddings:
         student_wrapper.reset_embeddings()
@@ -226,12 +206,15 @@ def _trainer_from(
         assert args.exclude in ["final", "intermediate"]
         exclude = [args.exclude]
 
-    return ModelStudentTrainer(
-        model_wrapper=student_wrapper,
-        teachers_models=teacher_wrappers,
-        feature_match_loss_weight=args.feature_match_weight,
-        weights=student_weights,
-        exclude=exclude,
+    return (
+        ModelStudentTrainer(
+            model_wrapper=student_wrapper,
+            teachers_models=teacher_wrappers,
+            feature_match_loss_weight=args.feature_match_weight,
+            weights=student_weights,
+            exclude=exclude,
+        ),
+        teacher_model,
     )
 
 
@@ -283,7 +266,7 @@ def main(args: argparse.Namespace) -> None:
         sampling_mode=args.sampling,
     )
     # Instantiate trainer with model wrapper
-    model = _trainer_from(args, stats, folder)
+    model, teacher_model = _trainer_from(args, stats, folder)
 
     # find folders with the name "/test-*/"
     evalDatasets = [
@@ -294,6 +277,7 @@ def main(args: argparse.Namespace) -> None:
     # Use EvaluationTracker for best model management
     tracker = EvaluationTracker(evalDatasets, model, folder=folder, save_postfix="best")
     tracker.evaluate_gaze(epoch=0)  # evaluate loaded model
+    teacher_model.load(str(folder), postfix="best")
 
     # Create training loop using utilities
     trainStep = create_training_loop(model, trainDataset)
@@ -302,7 +286,9 @@ def main(args: argparse.Namespace) -> None:
             desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}"
         )
         model.save(str(folder), postfix="latest")
-        tracker.evaluate_gaze(epoch=epoch)  # evaluate loaded model
+        if tracker.evaluate_gaze(epoch=epoch) and args.self_distill:
+            teacher_model.load(str(folder), postfix="best")
+
         logger.info(tracker.last_output)
         if args.patience <= (epoch - tracker.best_epoch):
             logger.info("Early stopping")
@@ -322,6 +308,12 @@ if __name__ == "__main__":
         default=False,
         action="store_true",
         help="Force training to continue even if weights are missing.",
+    )
+    parser.add_argument(
+        "--self-distill",
+        default=False,
+        action="store_true",
+        help="Enable self-distillation.",
     )
     parser.add_argument("--folder", type=str, default=str(ROOT_FOLDER))
     parser.add_argument(
@@ -354,12 +346,6 @@ if __name__ == "__main__":
         "Format: 'postfix' or 'model/postfix'. "
         "If provided, loads weights into frozen teacher for distillation. "
         "Weights must match --teacher-scale dimensions.",
-    )
-    parser.add_argument(
-        "--teacher-clones",
-        type=str,
-        default="",
-        help="How many times clone pre-trained teacher model. Can be one number for all or comma-separated list.",
     )
     parser.add_argument(
         "--student-index",

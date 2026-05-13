@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import tensorflow as tf
 import NN.Utils as NNU
-from NN.models import ResidualAE
 
 from Core import Utils
 from Core.logging_config import get_logger
@@ -26,33 +25,6 @@ from Core.models.TrainerAdapter import TrainerAdapter
 from Core.models.PredictionOutputTypes import PredictionOutput
 
 logger = get_logger(__name__)
-
-
-class GradientReversalLayer(tf.keras.layers.Layer):
-    def __init__(self, alpha=1.0):
-        super().__init__()
-        self._alpha = alpha * -1.0
-
-    def call(self, x):
-        @tf.custom_gradient
-        def f(x):
-            def grad(dy):
-                return self._alpha * dy
-
-            return x, grad
-
-        return f(x)
-
-
-def latent_extractor(start_idx, end_idx, only_middle):
-    def F(x):
-        end = tf.minimum(end_idx, x.shape[-1])
-        mid = x[..., start_idx:end]
-        if only_middle:
-            return mid
-        return x[..., :start_idx], mid, x[..., end:]
-
-    return F
 
 
 class ModelStudentTrainer:
@@ -110,12 +82,16 @@ class ModelStudentTrainer:
         self._feature_match_loss_weight = feature_match_loss_weight
 
         # Create adapters for latent space adaptation (will be created during first call)
-        self._adapters = [
-            TrainerAdapter(exclude=self._exclude) for _ in range(len(teachers_models))
-        ]
-        self._residual_intermediate = None
-        self._residual_final = None
-        self._grl = GradientReversalLayer()
+        self._adapters = {}
+        if "final" not in self._exclude:
+            self._adapters["final"] = TrainerAdapter(
+                name="final", getter=lambda x: x.latents
+            )
+
+        if "intermediate" not in self._exclude:
+            self._adapters["intermediate"] = TrainerAdapter(
+                name="intermediate", getter=lambda x: x.intermediate_latents
+            )
 
         # Create optimizer for gradient descent
         self.compile()
@@ -168,105 +144,20 @@ class ModelStudentTrainer:
         temp_losses = self._train_on(fake_data, fake_y, teacher_outputs)
         self._loss_keys: List[str] = list(temp_losses.keys())
 
-    def _adapter_loss(
+    def _calc_teachers_masks(
         self,
-        start_idx,
-        end_idx,
-        student_output,
-        teacher_output,
-        idx,
-        target,
-        target_student_loss,
-    ):
-        F = latent_extractor(start_idx, end_idx, only_middle=True)
+        y: Dict[str, tf.Tensor],
+        teacher_outputs: List[PredictionOutput],
+        student_loss: tf.Tensor,
+    ) -> List[tf.Tensor]:
+        res = []
+        for teacher in teacher_outputs:
+            predictions = {"result": teacher.result}
+            loss = calculate_losses(predictions, y)["result"]
+            mask = tf.stop_gradient(tf.where(loss < student_loss, 1.0, 0.0))
+            res.append(mask)
 
-        student_output_cut = PredictionOutput(
-            result=student_output.result,
-            raw=student_output.raw,
-            intermediate_latents=F(student_output.intermediate_latents),
-            latents=F(student_output.latents),
-        )
-
-        adapter = self._adapters[idx]
-        # Add latent matching to predictions/y_validated dicts for calculate_losses()
-        adapted_loss = adapter.calc_loss(
-            student_output_cut,
-            teacher_output,
-            target=target,
-            target_student_loss=target_student_loss,
-            loss_weight=self._feature_match_loss_weight,
-        )
-        return {f"{idx}_{k}": v for k, v in adapted_loss.items()}
-
-    def _create_residual_if_needed(self, dim) -> None:
-        if not self._residual_intermediate and ("intermediate" not in self._exclude):
-            self._residual_intermediate = ResidualAE(
-                dim,
-                name="ResidualIntermediate",
-            )
-
-        if not self._residual_final and ("final" not in self._exclude):
-            self._residual_final = ResidualAE(
-                dim,
-                name="ResidualFinal",
-            )
-
-    def _calc_regularization(self, v):
-        mean = tf.abs(tf.reduce_mean(v, axis=-1))
-        mean = tf.maximum(mean - 1.0, 0.0)  # 0..1 - ok
-        std = tf.abs(tf.math.reduce_std(v, axis=-1))
-        std = tf.maximum(std - 1.0, 0.0)  # 0..1 - ok
-        return mean + std
-
-    def _calc_nce(self, v, N, latent_subdim, ae):
-        norm_v = NNU.normalize_std(v)
-        inputs = []
-        targets = []
-        for idx in range(N):
-            start_idx = idx * latent_subdim
-            end_idx = start_idx + latent_subdim
-            extractor = latent_extractor(start_idx, end_idx, only_middle=False)
-            A, B, C = extractor(norm_v)
-            A = tf.stop_gradient(A)
-            C = tf.stop_gradient(C)
-            inputs.append(tf.concat([A, tf.zeros_like(B), C], axis=-1))
-            targets.append(tf.concat([A, self._grl(B), C], axis=-1))
-
-        B = tf.shape(norm_v)[0]
-        inputs = tf.concat(inputs, axis=0)
-        reconstructed = ae(inputs, training=True)
-        loss = 0.0
-        for idx, target in enumerate(targets):
-            start_idx = idx * latent_subdim
-            end_idx = start_idx + latent_subdim
-            extractor = latent_extractor(start_idx, end_idx, only_middle=True)
-            pred = reconstructed[(idx * B) : ((idx + 1) * B)]
-            loss += tf.keras.losses.MeanSquaredError(reduction="none")(
-                y_true=target,
-                y_pred=pred,
-            )
-            # focused on B
-            loss += tf.keras.losses.MeanSquaredError(reduction="none")(
-                y_true=extractor(target),
-                y_pred=extractor(pred),
-            )
-
-        return loss
-
-    def _regularization_targets(self, student_output):
-        self._create_residual_if_needed(student_output.latents.shape[-1])
-        targets = []
-        if self._residual_intermediate:
-            latents = student_output.intermediate_latents
-            ae = self._residual_intermediate
-            targets.append((latents, "intermediate", ae))
-
-        if self._residual_final:
-            latents = student_output.latents
-            ae = self._residual_final
-            targets.append((latents, "final", ae))
-
-        return targets
+        return res
 
     @tf.function
     def _train_on(
@@ -304,34 +195,21 @@ class ModelStudentTrainer:
             "result": student_output.result,  # main loss
         }
         losses = calculate_losses(predictions, y_validated, training=True)
-        latent_dim = tf.shape(student_output.latents)[-1]
-        N = len(teacher_outputs) + 1
-        latent_subdim = tf.cast(latent_dim / N, tf.int32)
-        tf.debugging.assert_greater(latent_subdim, 0)
+        teachers_masks = self._calc_teachers_masks(
+            y_validated, teacher_outputs, student_loss=losses["result"]
+        )
+        weights = []
+        for idx, mask in enumerate(teachers_masks):
+            acc = losses[f"{idx}_teacher_acc"] = tf.reduce_mean(mask)
+            weights.append(self._feature_match_loss_weight * (1.0 + mask + acc))
 
-        def adapter_loss(idx, teacher_output):
-            start_idx = idx * latent_subdim
-            return self._adapter_loss(
-                start_idx=start_idx,
-                end_idx=start_idx + latent_subdim,
-                student_output=student_output,
-                teacher_output=teacher_output,
-                idx=idx,
-                target=y_validated["result"],
-                target_student_loss=losses["result"],
+        for adapter in self._adapters.values():
+            adapted_loss = adapter.calc_loss(
+                student=student_output,
+                teachers=teacher_outputs,
+                loss_weights=weights,
             )
-
-        for idx, teacher_output in enumerate(teacher_outputs):
-            adapted_loss = adapter_loss(idx=idx, teacher_output=teacher_output)
             losses = {**losses, **adapted_loss}
-
-        # latents regularization and InfoNCE
-        for v, name, ae in self._regularization_targets(student_output):
-            losses[f"{name}_reg"] = self._calc_regularization(v) * 1e-1
-            # calc InfoNCE
-            losses[f"{name}_ince"] = (
-                self._calc_nce(v, N=N, latent_subdim=latent_subdim, ae=ae) * 1e-1
-            )
 
         return {k: tf.reduce_mean(v) for k, v in losses.items()}
 
@@ -457,13 +335,8 @@ class ModelStudentTrainer:
         - Adapter intermediate variables
         """
         trainable_vars = self._model_wrapper.trainable_variables
-        for adapter in self._adapters:
+        for adapter in self._adapters.values():
             trainable_vars.extend(adapter.trainable_variables)
-
-        if self._residual_intermediate:
-            trainable_vars.extend(self._residual_intermediate.trainable_variables)
-        if self._residual_final:
-            trainable_vars.extend(self._residual_final.trainable_variables)
         return trainable_vars
 
     def save(self, folder: str = "models", postfix: str = "") -> None:
@@ -493,13 +366,8 @@ class ModelStudentTrainer:
         # Get checkpoint path using wrapper's helper method
         model_path = self._model_wrapper.get_checkpoint_path(folder, postfix)
 
-        for idx, adapter in enumerate(self._adapters):
-            adapter.save_npz(model_path, idx)
-
-        if self._residual_intermediate:
-            self._residual_intermediate.save_npz(f"{model_path}/residual-intermediate")
-        if self._residual_final:
-            self._residual_final.save_npz(f"{model_path}/residual-final")
+        for adapter in self._adapters.values():
+            adapter.save_npz(model_path)
 
     def load(
         self,
@@ -531,14 +399,7 @@ class ModelStudentTrainer:
         # Load adapters
         model_path = self._model_wrapper.get_checkpoint_path(folder, postfix)
 
-        for idx, adapter in enumerate(self._adapters):
-            adapter.load_npz(model_path, idx)
-
-        if self._residual_intermediate:
-            self._residual_intermediate.load_npz(
-                f"{model_path}/residual-intermediate", force=True
-            )
-        if self._residual_final:
-            self._residual_final.load_npz(f"{model_path}/residual-final", force=True)
+        for adapter in self._adapters.values():
+            adapter.load_npz(model_path)
 
         logger.info(f"Loaded adapters from {model_path}")

@@ -24,7 +24,8 @@ logger = get_logger(__name__)
 # Constants for data processing
 EYE_IMAGE_SIZE = 48  # Original eye image dimensions (48x48)
 EYE_CROP_SIZE = 32  # Cropped eye image dimensions (32x32)
-EYE_CROP_FRACTION = 32.0 / 48.0  # Fraction of eye image to use after cropping
+# Fraction of eye image to use after cropping
+EYE_CROP_FRACTION = EYE_CROP_SIZE / EYE_IMAGE_SIZE
 LIGHT_BLOB_POSITION_MIN = 0.0  # Minimum position for light blob generation
 
 
@@ -74,15 +75,18 @@ def _generate_random_crop_boxes(
         size = tf.random.uniform([flat_n], minval=EYE_CROP_FRACTION, maxval=max_size)
         # Create boxes in [y1, x1, y2, x2] format
         boxes = tf.stack(
-            [
-                pos_y1,
-                pos_x1,
-                pos_y1 + size,
-                pos_x1 + size,
-            ],
+            [pos_y1, pos_x1, pos_y1 + size, pos_x1 + size],
             axis=-1,
         )
-        return boxes
+        # replace some with central crops
+        size = tf.random.uniform([flat_n], minval=EYE_CROP_FRACTION, maxval=1.0)
+        central_boxes = tf.stack(
+            [0.5 - size / 2.0, 0.5 - size / 2.0, 0.5 + size / 2.0, 0.5 + size / 2.0],
+            axis=-1,
+        )
+        mask = tf.random.uniform([flat_n, 1]) < 0.5
+        tf.assert_equal(tf.shape(central_boxes), tf.shape(boxes))
+        return tf.where(mask, central_boxes, boxes)
 
     boxes = tf.cond(0.0 < region_factor, rnd, lambda: _generate_central_crop(flat_n))
     tf.assert_equal(tf.shape(boxes), (flat_n, 4))
@@ -91,14 +95,7 @@ def _generate_random_crop_boxes(
 
 def _generate_central_crop(flat_n: tf.Tensor) -> tf.Tensor:
     pos = tf.constant(
-        value=[
-            [
-                0.5 - EYE_CROP_FRACTION / 2,
-                0.5 - EYE_CROP_FRACTION / 2,
-                0.5 + EYE_CROP_FRACTION / 2,
-                0.5 + EYE_CROP_FRACTION / 2,
-            ]
-        ],
+        value=[[0.0, 0.0, 1.0, 1.0]],
         dtype=tf.float32,
     )
     return tf.repeat(pos, flat_n, axis=0)

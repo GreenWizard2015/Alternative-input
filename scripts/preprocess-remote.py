@@ -473,11 +473,7 @@ def processFolder(
         return 0, 0, True, {}
 
     # Validate sparsity using refactored module
-    try:
-        validate_dataset_sparsity(dataset["time"], MAX_DELTA_THRESHOLD)
-    except ValueError as e:
-        logger.warning(f"Dataset validation failed: {e}")
-        return 0, 0, True, {}
+    validate_dataset_sparsity(dataset["time"], MAX_DELTA_THRESHOLD)
 
     deltas_arr = np.diff(dataset["time"])
     logger.info(
@@ -560,8 +556,8 @@ def processFolder(
             f"No valid test samples found after filtering! Test ratio: {testRatio}, minimum frames: {minimumFrames}. Dataset will be skipped."
         )
         return 0, 0, True, {}
-
-    train_samples = np.sort(list(set(filtered.used_samples()) - set(test_samples)))
+    # train_samples is subset of all valid
+    train_samples = np.sort(list(set(all_valid) - set(test_samples)))
     if len(train_samples) == 0:
         logger.warning(
             "No valid train samples found after filtering! Dataset will be skipped."

@@ -4,6 +4,8 @@ Provides lightweight neural network adapter for projecting student latent featur
 to teacher latent feature space during knowledge distillation training.
 """
 
+from typing import Dict
+
 import tensorflow as tf
 from NN.layers.sMLP import sMLP
 
@@ -23,10 +25,17 @@ class ResidualAE(NpzModelMixin, tf.keras.Model):
             raise ValueError(f"dim must be positive, got {dim}")
 
         N = 3
-        sizes = ([int(dim * 2)] * N) + [dim]
-        self._ae = sMLP(sizes=sizes, name="to_teacher")
-        self._ae.build((None, None, dim))
+        sizes = [int(dim * 2)] * N
+        self._ae = sMLP(sizes=sizes, activation="relu", name="to_teacher")
+        self._ae.build((None, None, 2 * dim))
+        self._linear = tf.keras.layers.Dense(dim, activation="linear")
+        self._linear.build((None, None, 2 * dim))
 
-    def call(self, features: tf.Tensor) -> tf.Tensor:
+    def call(self, data: Dict[str, tf.Tensor]) -> tf.Tensor:
         """Project student features to teacher dimension space."""
-        return self._ae(features, training=True) + features
+        features = data["features"]
+        res = self._ae(
+            tf.concat([features, data["mask"]], axis=-1),
+            training=True,
+        )
+        return self._linear(res, training=True) + features

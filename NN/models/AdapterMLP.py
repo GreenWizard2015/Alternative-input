@@ -55,11 +55,13 @@ class AdapterMLP(NpzModelMixin, tf.keras.Model):
         if student_dim <= 0:
             raise ValueError(f"student_dim must be positive, got {student_dim}")
 
-        N = 2
-        sizes = ([student_dim] * N) + ([teacher_dim] * N)
-        self._to_teacher = sMLP(sizes=sizes, name="to_teacher")
+        sizes = [teacher_dim] * 2
+        self._to_teacher = sMLP(sizes=sizes, activation="relu", name="to_teacher")
         self._to_teacher.build((None, None, student_dim))
+        self._linear = tf.keras.layers.Dense(teacher_dim, activation="linear")
+        self._linear.build((None, None, teacher_dim))
 
     def call(self, features: tf.Tensor) -> tf.Tensor:
         """Project student features to teacher dimension space."""
-        return self._to_teacher(features, training=True)
+        res = self._to_teacher(features, training=True)
+        return self._linear(res)

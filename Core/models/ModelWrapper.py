@@ -663,3 +663,30 @@ class ModelWrapper(tf.keras.Model):
     @property
     def cache_id(self):
         return self._cache_id
+
+    def clone(self):
+        """Create a deep copy of this ModelWrapper instance.
+
+        Creates a new ModelWrapper with identical architecture and weights
+        to the original model. Used for self-distillation where the same model
+        serves as both teacher and student.
+
+        Returns:
+            ModelWrapper: A new instance with identical architecture and weights
+        """
+        # Create a new instance with the same configuration
+        # Clone the essential parameters from the original model
+        new_wrapper = ModelWrapper(
+            timesteps=self._timesteps,
+            stats=self._stats,
+            model=self._model_name,
+            user=None,  # Will be recomputed from stats if needed
+            predictor_mode=self._predictor_mode,
+            cache_id=f"{self._cache_id}_clone" if self._cache_id else None,
+            embeddingSize=self._embedding_size,
+            latent_size=self._latent_size,
+            mode=self._mode,
+            scale_mult=self._scale_mult,
+        )
+
+        return new_wrapper

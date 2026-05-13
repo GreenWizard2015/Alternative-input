@@ -291,7 +291,7 @@ class EvaluationTracker:
         metrics = _mean_metrics(dataset_gen)
         return metrics, sample_count
 
-    def evaluate_gaze(self, epoch: int = 0) -> float:
+    def evaluate_gaze(self, epoch: int = 0) -> bool:
         """Evaluate gaze prediction model on all datasets and track best model.
 
         Computes weighted average metrics across datasets using sample count weighting.
@@ -353,8 +353,9 @@ class EvaluationTracker:
 
         mean_loss = all_metrics.get("total", np.inf)
 
+        is_better = mean_loss < self.best_loss
         # Track best model
-        if mean_loss < self.best_loss:
+        if is_better:
             self.best_loss = mean_loss
             self.best_epoch = epoch
             self.model.save(str(self.folder), postfix=self.save_postfix)
@@ -365,7 +366,7 @@ class EvaluationTracker:
         progress = f"Passed {epoch - self.best_epoch} epochs since the last improvement (best: {self.best_loss:.5f})"
         self.last_output = f"{metrics_str}\n{progress}"
 
-        return mean_loss
+        return is_better
 
 
 def format_epoch_desc(epoch: int, total_epochs: int) -> str:
