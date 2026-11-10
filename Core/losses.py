@@ -9,7 +9,9 @@ import tensorflow as tf
 from Core.Constants import PSEUDO_HUBER_LOSS_DELTA
 
 
-def huber_loss(ytrue: tf.Tensor, ypred: tf.Tensor) -> tf.Tensor:
+def huber_loss(
+    ytrue: tf.Tensor, ypred: tf.Tensor, delta: float = PSEUDO_HUBER_LOSS_DELTA
+) -> tf.Tensor:
     """Calculate pseudo-Huber loss.
 
     Uses smooth approximation of absolute loss that is less sensitive
@@ -23,7 +25,7 @@ def huber_loss(ytrue: tf.Tensor, ypred: tf.Tensor) -> tf.Tensor:
         Loss tensor of shape (B, T) or (B,)
     """
     diff = tf.square(ytrue - ypred)
-    loss = tf.sqrt(diff + PSEUDO_HUBER_LOSS_DELTA**2) - PSEUDO_HUBER_LOSS_DELTA
+    loss = tf.sqrt(diff + delta**2) - delta
     return tf.reduce_mean(loss, axis=-1)
 
 
@@ -46,8 +48,9 @@ def calculate_losses(
         tf.debugging.assert_equal(tf.shape(pred), tf.shape(y_true))
 
         huber = huber_loss(ytrue=y_true, ypred=pred)
-        denom = tf.stop_gradient(tf.math.reduce_std(huber)) + 1e-9
-        normalized = (huber - tf.stop_gradient(tf.reduce_mean(huber))) / denom
-        losses[key] = normalized + tf.stop_gradient(huber - normalized)
+        # denom = tf.stop_gradient(tf.math.reduce_std(huber)) + 1e-9
+        # normalized = (huber - tf.stop_gradient(tf.reduce_mean(huber))) / denom
+        losses[key] = huber
+        # normalized + tf.stop_gradient(huber - normalized)
 
     return losses

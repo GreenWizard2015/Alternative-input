@@ -84,14 +84,10 @@ class ModelStudentTrainer:
         # Create adapters for latent space adaptation (will be created during first call)
         self._adapters = {}
         if "final" not in self._exclude:
-            self._adapters["final"] = TrainerAdapter(
-                name="final", getter=lambda x: x.latents
-            )
+            self._adapters["final"] = TrainerAdapter(name="final")
 
         if "intermediate" not in self._exclude:
-            self._adapters["intermediate"] = TrainerAdapter(
-                name="intermediate", getter=lambda x: x.intermediate_latents
-            )
+            self._adapters["intermediate"] = TrainerAdapter(name="intermediate")
 
         # Create optimizer for gradient descent
         self.compile()
@@ -109,24 +105,21 @@ class ModelStudentTrainer:
         """
         self._optimizer = NNU.create_optimizer()
 
-    def _gather_teacher_outputs(self, x) -> List[PredictionOutput]:
+    def _gather_teacher_outputs(self, x, ids) -> List[PredictionOutput]:
         """Gather predictions from all teacher models."""
         by_cache_id = {}
-        for teacher in self._teachers_models:
-            cache_id = teacher.cache_id
+        for teacher, cache_id in zip(self._teachers_models, ids):
             if cache_id not in by_cache_id:
                 by_cache_id[cache_id] = teacher.call(inputs=x, training=False)
 
-        res = [by_cache_id[teacher.cache_id] for teacher in self._teachers_models]
+        res = [by_cache_id[id] for id in ids]
         return [
             PredictionOutput(
-                intermediate_latents=tf.stop_gradient(
-                    teacher_output.intermediate_latents
-                ),
-                latents=tf.stop_gradient(teacher_output.latents),
-                result=tf.stop_gradient(teacher_output.result),
+                intermediate_latents=teacher_output.intermediate_latents,
+                latents=teacher_output.latents,
+                result=teacher_output.result,
                 raw=None,
-            )
+            ).stop_gradient()
             for teacher_output in res
         ]
 
@@ -140,24 +133,60 @@ class ModelStudentTrainer:
         fake_data, fake_y = self._model_wrapper.create_fake_data(
             batch_size=1, include_result=False
         )
-        teacher_outputs = self._gather_teacher_outputs(fake_data)
+        ids = [x.cache_id for x in self._teachers_models]
+        teacher_outputs = self._gather_teacher_outputs(fake_data, ids=ids)
         temp_losses = self._train_on(fake_data, fake_y, teacher_outputs)
         self._loss_keys: List[str] = list(temp_losses.keys())
 
-    def _calc_teachers_masks(
+    def _calc_teachers_losses(
         self,
         y: Dict[str, tf.Tensor],
         teacher_outputs: List[PredictionOutput],
-        student_loss: tf.Tensor,
-    ) -> List[tf.Tensor]:
-        res = []
+    ) -> tf.Tensor:
+        losses = []
         for teacher in teacher_outputs:
             predictions = {"result": teacher.result}
-            loss = calculate_losses(predictions, y)["result"]
-            mask = tf.stop_gradient(tf.where(loss < student_loss, 1.0, 0.0))
-            res.append(mask)
+            loss = tf.stop_gradient(calculate_losses(predictions, y)["result"])
+            losses.append(loss[..., None])
 
-        return res
+        return losses
+
+    def _best_teacher_result(
+        self,
+        teacher_outputs: List[PredictionOutput],
+        teachers_losses: List[tf.Tensor],
+    ) -> tf.Tensor:
+        losses = tf.concat(teachers_losses, axis=-1)
+        best_idx = tf.argmin(losses, axis=-1, output_type=tf.int32)
+        teacher_results = tf.stack(
+            [teacher.result for teacher in teacher_outputs], axis=2
+        )
+        return tf.gather(teacher_results, best_idx, axis=2, batch_dims=2)
+
+    def _specialist_weights(self, teachers_losses, student_loss):
+        tf.debugging.assert_rank(teachers_losses, 3)
+        advantage = tf.nn.relu(student_loss - teachers_losses) * 1e3
+        return advantage
+
+    def _normalize_specialist_weights(self, advantage, delta=1e-2):
+        """Energy scale must be in [delta, 1]"""
+        useful = advantage > 0.0
+
+        bad_count = tf.reduce_sum(
+            tf.cast(~useful, advantage.dtype), axis=-1, keepdims=True
+        )
+        remaining = 1.0 - delta * bad_count
+        scale = tf.math.divide_no_nan(
+            remaining, tf.reduce_sum(advantage, axis=-1, keepdims=True)
+        )
+
+        weights = tf.where(useful, advantage * scale, delta)
+        weights = tf.stop_gradient(weights)
+
+        tf.debugging.assert_equal(tf.shape(weights), tf.shape(advantage))
+        tf.debugging.assert_all_finite(weights, "Non-finite specialist weights.")
+
+        return weights
 
     @tf.function
     def _train_on(
@@ -188,58 +217,93 @@ class ModelStudentTrainer:
         """
         # Validate ground truth points are in valid range
         y_validated = validate_data_dict(y)
-
-        # Get student predictions and latents
         student_output = self._model_wrapper.call(inputs=data, training=True)
-        predictions = {
-            "result": student_output.result,  # main loss
-        }
-        losses = calculate_losses(predictions, y_validated, training=True)
-        teachers_masks = self._calc_teachers_masks(
-            y_validated, teacher_outputs, student_loss=losses["result"]
-        )
-        weights = []
-        for idx, mask in enumerate(teachers_masks):
-            acc = losses[f"{idx}_teacher_acc"] = tf.reduce_mean(mask)
-            weights.append(self._feature_match_loss_weight * (1.0 + mask + acc))
 
-        for adapter in self._adapters.values():
-            adapted_loss = adapter.calc_loss(
-                student=student_output,
-                teachers=teacher_outputs,
-                loss_weights=weights,
+        losses = calculate_losses(
+            {"result": student_output.result},
+            y_validated,
+            training=True,
+        )
+        student_loss = losses["result"][..., None]
+
+        k = 1
+        teachers_losses = self._calc_teachers_losses(y_validated, teacher_outputs)
+        teachers_losses = tf.stop_gradient(
+            tf.concat(teachers_losses + [student_loss] * k, axis=-1)
+        )
+        shp = tf.shape(student_loss)
+        B, N = shp[0], shp[1]
+        M = len(teacher_outputs)
+        tf.debugging.assert_equal(tf.shape(teachers_losses), (B, N, M + k))
+        top_k_losses_idx = tf.argsort(teachers_losses, axis=-1, direction="ASCENDING")
+        top_k_losses_idx = top_k_losses_idx[..., :k]
+
+        top_mask = M <= top_k_losses_idx
+        in_top_k = tf.math.reduce_any(top_mask[..., :1], axis=-1)
+        in_top_k = tf.cast(in_top_k, tf.float32)
+        losses["student_acc"] = tf.stop_gradient(tf.reduce_mean(in_top_k))
+        # calc adapters loss
+        for idx, _ in enumerate(teacher_outputs):
+            top_mask = idx == top_k_losses_idx
+
+            in_top_k = tf.math.reduce_any(top_mask[..., :1], axis=-1)
+            in_top_k = tf.cast(in_top_k, tf.float32)
+            losses[f"{idx}_teacher_acc"] = tf.reduce_mean(in_top_k)
+
+        advantage = self._specialist_weights(teachers_losses[..., :-k], student_loss)
+        best_raw = tf.argmin(teachers_losses, axis=-1, output_type=tf.int32)
+        best_index = tf.where(best_raw >= M, tf.zeros_like(best_raw), best_raw + 1)
+        # apply adapters
+        teacher_latents = [x.latents for x in teacher_outputs]
+        if False:
+            intermediate = [x.intermediate_latents for x in teacher_outputs]
+            teacher_latents.extend(intermediate)
+            advantage = tf.concat([advantage, advantage], axis=-1)
+
+        temperature = 1e-2
+        loss_weights = self._normalize_specialist_weights(advantage / temperature)
+        if "final" not in self._exclude:
+            adapted_loss = self._adapters["final"].calc_loss(
+                student_latents=student_output.latents,
+                teachers=teacher_latents,
+                loss_weights=loss_weights,
+                best_index=best_index,
+                scale=self._feature_match_loss_weight,
             )
             losses = {**losses, **adapted_loss}
 
-        return {k: tf.reduce_mean(v) for k, v in losses.items()}
+        if "intermediate" not in self._exclude:
+            adapted_loss = self._adapters["intermediate"].calc_loss(
+                student_latents=student_output.intermediate_latents,
+                teachers=teacher_latents,
+                loss_weights=loss_weights,
+                best_index=best_index,
+                scale=self._feature_match_loss_weight * 0.1,
+            )
+            losses = {**losses, **adapted_loss}
 
-    @tf.function
-    def _train_step(
-        self, data: Tuple[Dict[str, Dict[str, tf.Tensor]], Dict[str, tf.Tensor]]
-    ) -> Dict[str, tf.Tensor]:
-        """Single training step with gradient updates and micro-batch support.
+        losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
+        # scale distilation gradients
+        distil_names = ["distil_final", "distil_intermediate"]
+        distil_names = [name for name in distil_names if name in losses]
+        if distil_names:
+            distil_total = tf.add_n([losses[name] for name in distil_names])
 
-        Trains on both clean and augmented data variants with micro-batch processing
-        for memory efficiency. Applies gradients to all trainable variables
-        via AdamW optimizer.
+            max_scale = 0.25
+            scale = tf.stop_gradient(
+                tf.clip_by_value(
+                    tf.math.divide_no_nan(max_scale * losses["result"], distil_total),
+                    0.0,
+                    max_scale,
+                )
+            )
 
-        Args:
-            data: Tuple of (X_dict, (Y_tensor,)) where:
-                - X_dict: Dictionary with 'clean' and 'augmented' sub-dicts containing facial data
-                - Y_tensor: Ground truth gaze points of shape (B, T, 1, 2)
+            for name in distil_names:
+                losses[name] *= scale
 
-        Returns:
-            Dictionary of scalar loss tensor values with keys:
-            - '{loss}': Prediction losses
-            - 'total-clean': Sum of all clean data losses
-            - 'total-augmented': Sum of all augmented data losses
-            - 'loss': Total combined loss (used for gradient computation)
-        """
-        x, y = data
-        y = {**x["clean"], **y}
-        x_augm: Dict[str, tf.Tensor] = x["augmented"]
-        x_clean: Dict[str, tf.Tensor] = x["clean"]
+        return losses
 
+    def _train_on_subset(self, x_augm, y, teacher_outputs):
         batch_size = tf.shape(x_augm["points"])[0]
 
         # Determine batch size
@@ -259,8 +323,6 @@ class ModelStudentTrainer:
         accumulated_losses = tf.TensorArray(
             dtype=tf.float32, size=num_micro_batches, dynamic_size=False
         )
-        # Get teacher outputs in inference mode
-        teacher_outputs = self._gather_teacher_outputs(x_clean)
 
         for idx in tf.range(num_micro_batches):
             start_idx = idx * micro_batch_size
@@ -293,7 +355,39 @@ class ModelStudentTrainer:
         # Average losses across accumulated micro-batches
         stacked_losses = accumulated_losses.stack()
         avg_losses = tf.reduce_mean(stacked_losses, axis=0)
+        return avg_losses
 
+    @tf.function
+    def _train_step(
+        self,
+        data: Tuple[Dict[str, Dict[str, tf.Tensor]], Dict[str, tf.Tensor]],
+        ids: List[str],
+    ) -> Dict[str, tf.Tensor]:
+        """Single training step with gradient updates and micro-batch support.
+
+        Trains on both clean and augmented data variants with micro-batch processing
+        for memory efficiency. Applies gradients to all trainable variables
+        via AdamW optimizer.
+
+        Args:
+            data: Tuple of (X_dict, (Y_tensor,)) where:
+                - X_dict: Dictionary with 'clean' and 'augmented' sub-dicts containing facial data
+                - Y_tensor: Ground truth gaze points of shape (B, T, 1, 2)
+
+        Returns:
+            Dictionary of scalar loss tensor values with keys:
+            - '{loss}': Prediction losses
+            - 'total-clean': Sum of all clean data losses
+            - 'total-augmented': Sum of all augmented data losses
+            - 'loss': Total combined loss (used for gradient computation)
+        """
+        x, y = data
+        y = {**x["clean"], **y}
+        x_augm = x["augmented"]
+        x_clean = x["clean"]
+        # Get teacher outputs in inference mode
+        teacher_outputs = self._gather_teacher_outputs(x_clean, ids=ids)
+        avg_losses = self._train_on_subset(x_augm, y, teacher_outputs)
         return {k: avg_losses[idx] for idx, k in enumerate(self._loss_keys)}
 
     def fit(
@@ -307,7 +401,8 @@ class ModelStudentTrainer:
         Returns:
             Dictionary of loss values as numpy arrays
         """
-        losses = self._train_step(data)
+        ids = [x.cache_id for x in self._teachers_models]
+        losses = self._train_step(data, ids=ids)
         return Utils.to_numpy(losses)
 
     def eval(

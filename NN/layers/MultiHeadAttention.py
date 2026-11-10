@@ -32,7 +32,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self,
         d_model: int = 512,
         num_heads: int = 8,
-        dropout_rate: float = 0.1,
+        dropout_rate: float = 0.01,
         hypersphere: bool = False,
         **kwargs: Any,
     ) -> None:

@@ -13,7 +13,6 @@ from NN.models.Step2LatentModel import Step2LatentModel
 from NN.models.NpzModelMixin import NpzModelMixin
 from Core.logging_config import get_logger
 from Core.Constants import VALID_TRAINING_MODES
-from NN.Utils import structured_latent_dropout
 
 logger = get_logger(__name__)
 
@@ -151,7 +150,7 @@ class GazePredictionModel(NpzModelMixin, tf.keras.Model):
                 - 'final_latent': Final latent from Step2Latent (full mode) or intermediate_latent (encoder mode)
                   of shape (batch, seq_len, latent_size)
         """
-        embeddings = structured_latent_dropout(inputs["embeddings"], training=training)
+        embeddings = inputs["embeddings"]
         # Face2Step: Encode facial data to latent representation
         face2step_inputs = {
             "points": inputs["points"],
@@ -165,9 +164,7 @@ class GazePredictionModel(NpzModelMixin, tf.keras.Model):
         # Select which latent to use as final based on mode
         if self.mode == "full":
             step2latent_inputs = {
-                "latent": structured_latent_dropout(
-                    latent_intermediate, training=training
-                ),
+                "latent": latent_intermediate,
                 "time": inputs["time"],
                 "embeddings": embeddings,
             }

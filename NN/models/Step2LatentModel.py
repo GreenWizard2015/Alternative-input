@@ -54,13 +54,13 @@ class Step2LatentModel(NpzModelMixin, tf.keras.Model):
                 If None, computed from scale_mult: max(1, int(16 * scale_mult)).
                 Must divide scaled_latent_size evenly for multi-head attention.
             dff_multiplier: Multiplier for feed-forward dimension.
-                If None, computed from scale_mult: int(16 * scale_mult).
+                If None, computed from scale_mult: max(1, int(4 * scale_mult)).
                 Feed-forward dimension = scaled_latent_size * dff_multiplier.
             scale_mult: Scaling multiplier for all dimensions (default: 1.0).
                 Must be positive. Scaled dimensions:
                 - scaled_latent_size = int(latent_size * scale_mult)
                 - num_heads scaled from 16 to max(1, int(16 * scale_mult)) if not explicit
-                - dff_multiplier scaled from 16 to int(16 * scale_mult) if not explicit
+                - dff_multiplier scaled from 4 to max(1, int(4 * scale_mult)) if not explicit
             **kwargs: Additional keyword arguments passed to parent Model class.
 
         Raises:
@@ -100,7 +100,7 @@ class Step2LatentModel(NpzModelMixin, tf.keras.Model):
 
         # Compute dff_multiplier: use scaled value if not explicitly provided
         if dff_multiplier is None:
-            dff_multiplier = int(16 * scale_mult)
+            dff_multiplier = max(1, int(4 * scale_mult))
 
         if dff_multiplier <= 0:
             raise ValueError(f"dff_multiplier must be positive, got {dff_multiplier}")

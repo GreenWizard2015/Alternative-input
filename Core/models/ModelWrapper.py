@@ -23,7 +23,6 @@ from NN.models.EmbeddingsProcessor import EmbeddingsProcessor
 from Core.logging_config import get_logger
 from NN.models.GazePredictionModel import GazePredictionModel
 from NN.models.PredictorBlock import PredictorBlock
-from NN.Utils import structured_latent_dropout
 
 from Core import Utils
 from Core.Constants import (
@@ -341,10 +340,7 @@ class ModelWrapper(tf.keras.Model):
         latent_final = model_output["final_latent"]
 
         # Use final latent to generate gaze predictions
-        predictor_output = self._predictor(
-            structured_latent_dropout(latent_final, training=training),
-            training=training,
-        )
+        predictor_output = self._predictor(latent_final, training=training)
         # PredictorBlock returns {"result": points, ...other outputs}
         result = predictor_output["result"]
 
@@ -664,7 +660,7 @@ class ModelWrapper(tf.keras.Model):
     def cache_id(self):
         return self._cache_id
 
-    def clone(self):
+    def clone(self, cache_id=None):
         """Create a deep copy of this ModelWrapper instance.
 
         Creates a new ModelWrapper with identical architecture and weights
@@ -682,7 +678,7 @@ class ModelWrapper(tf.keras.Model):
             model=self._model_name,
             user=None,  # Will be recomputed from stats if needed
             predictor_mode=self._predictor_mode,
-            cache_id=f"{self._cache_id}_clone" if self._cache_id else None,
+            cache_id=cache_id or f"{self._cache_id}_clone",
             embeddingSize=self._embedding_size,
             latent_size=self._latent_size,
             mode=self._mode,
@@ -690,3 +686,6 @@ class ModelWrapper(tf.keras.Model):
         )
 
         return new_wrapper
+
+    def update_cache_id(self, cache_id):
+        self._cache_id = cache_id

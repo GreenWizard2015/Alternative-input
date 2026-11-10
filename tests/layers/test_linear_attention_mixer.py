@@ -300,6 +300,40 @@ class TestLinearAttentionMixer:
             tf.reduce_max(tf.abs(pooled)) < 10.0
         ), f"Output values should be in reasonable range, got max {tf.reduce_max(tf.abs(pooled))}"
 
+    def test_attention_projection_has_initial_gradient(self):
+        """Attention logits should not be disabled by zero scale at initialization."""
+        batch_size = 2
+        seq_len = 6
+        feature_dim = 32
+        max_dim = 16
+        layer = LinearAttentionMixer(
+            max_dim=max_dim,
+            activation="linear",
+            dropout_rate=0.0,
+        )
+        features = tf.reshape(
+            tf.linspace(-1.0, 1.0, batch_size * seq_len * feature_dim),
+            (batch_size, seq_len, feature_dim),
+        )
+
+        with tf.GradientTape() as tape:
+            output = layer(features, training=False)
+            loss = tf.reduce_sum(tf.square(output))
+
+        head_dim = feature_dim // layer.n_heads
+        expected_scale = head_dim**-0.5
+        tf.debugging.assert_near(layer.scale_factor, expected_scale)
+
+        attention_grads = tape.gradient(loss, layer.attention_layer.trainable_variables)
+        nonzero_grad_norm = tf.add_n(
+            [
+                tf.reduce_sum(tf.abs(grad))
+                for grad in attention_grads
+                if grad is not None
+            ]
+        )
+        assert float(nonzero_grad_norm.numpy()) > 0.0
+
     def test_4d_input_spatial(self):
         """Test with 4D spatial input (batch, height, width, channels).
         Pools along width axis, output: (batch, height, channels)."""

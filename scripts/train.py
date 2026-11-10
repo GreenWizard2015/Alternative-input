@@ -18,6 +18,7 @@ evaluation on a test set.
 
 from typing import List
 from pathlib import Path
+import time
 import argparse
 from Core.models import ModelStudentTrainer, ModelWrapper
 import Core.Utils as Utils
@@ -28,6 +29,7 @@ from Core.data.AugmentationDefaults import DEFAULT_AUGMENTATION_PARAMS
 from scripts.training_utils import (
     create_training_loop,
     EvaluationTracker,
+    MetricsCsvLogger,
     format_epoch_desc,
 )
 import numpy as np
@@ -36,6 +38,13 @@ from Core.logging_config import get_logger
 
 logger = get_logger(__name__)
 ROOT_FOLDER = Path(__file__).parent.parent
+
+
+def sleep_if_blackout_lock():
+    if (Path.home() / "blackout.lock").exists():
+        print("Blackout lock is active")
+    while (Path.home() / "blackout.lock").exists():
+        time.sleep(10)
 
 
 def _parse_model_weights(weights_str: str) -> dict:
@@ -110,6 +119,9 @@ def _teachers_from(
     wrapper_args = dict(timesteps=args.steps, stats=stats)
     teacher_scales = list(args.teacher_scale.split(","))
     teacher_weights = list(args.teacher_weights.split(","))
+    teacher_weights = [x for x in teacher_weights if x]
+    if not teacher_weights:
+        return [], []
     assert len(teacher_scales) == len(teacher_weights)
 
     def model_args(cache_id, scale, weights, model_prefix="teacher"):
@@ -148,9 +160,10 @@ def _student_from(args: argparse.Namespace, stats: dict, folder: Path) -> ModelW
         scale=args.student_scale,
         model_prefix="student",
         mode=args.mode,
+        embeddings=True,
         weights=args.student_weights,
-        embeddings=not args.no_embeddings,
         force=args.force,
+        cache_id="student",
     )
 
     return student_wrapper, student_weights
@@ -184,8 +197,10 @@ def _trainer_from(
     teacher_wrappers, wrappers_weights = _teachers_from(args, stats, folder)
     student_weights = None
     if args.student_index is not None:
-        student_wrapper = teacher_wrappers.pop(args.student_index)
-        student_weights = wrappers_weights.pop(args.student_index)
+        student_wrapper = teacher_wrappers[args.student_index].clone()
+        if args.pop:
+            teacher_wrappers.pop(args.student_index)
+        student_weights = wrappers_weights[args.student_index]
     else:
         student_wrapper, student_weights = _student_from(
             args, stats=stats, folder=folder
@@ -193,29 +208,36 @@ def _trainer_from(
         if student_weights is None and (0 < len(teacher_wrappers)):
             _transfer_model_weights(teacher_wrappers[0], student_wrapper)
 
-    teacher_model = student_wrapper
-    if args.self_distill:
-        teacher_model = student_wrapper.clone()
-        teacher_wrappers.append(teacher_model)
-
-    if args.no_embeddings:
-        student_wrapper.reset_embeddings()
+    distill_models = [student_wrapper.clone() for _ in range(args.self_distill)]
+    if student_weights:
+        weights = dict(student_weights)
+        weights["force"] = True
+        for teacher_model in distill_models:
+            teacher_model.load(**weights)
 
     exclude = []
     if args.exclude:
         assert args.exclude in ["final", "intermediate"]
         exclude = [args.exclude]
 
-    return (
-        ModelStudentTrainer(
-            model_wrapper=student_wrapper,
-            teachers_models=teacher_wrappers,
-            feature_match_loss_weight=args.feature_match_weight,
-            weights=student_weights,
-            exclude=exclude,
-        ),
-        teacher_model,
+    if args.reset:
+        student_weights = None
+        student_wrapper = student_wrapper.clone()
+
+    if args.online:
+        teacher_wrappers.append(student_wrapper)
+
+    teacher_wrappers.extend(distill_models)
+
+    trainer = ModelStudentTrainer(
+        model_wrapper=student_wrapper,
+        teachers_models=teacher_wrappers,
+        feature_match_loss_weight=args.feature_match_weight,
+        weights=student_weights,
+        exclude=exclude,
     )
+
+    return trainer, distill_models
 
 
 def main(args: argparse.Namespace) -> None:
@@ -266,33 +288,47 @@ def main(args: argparse.Namespace) -> None:
         sampling_mode=args.sampling,
     )
     # Instantiate trainer with model wrapper
-    model, teacher_model = _trainer_from(args, stats, folder)
-
+    model, teacher_models = _trainer_from(args, stats, folder)
+    sleep_if_blackout_lock()
     # find folders with the name "/test-*/"
     evalDatasets = [
         TestLoader(str(nm), batch_size=args.test_batch_size)
         for nm in sorted(folder.glob("test-main/test-*/"))
     ]
     evalDatasets = [ds for ds in evalDatasets if 0 < len(ds)]
+    metrics_logger = MetricsCsvLogger(folder)
+    logger.info("Writing train metrics to %s", metrics_logger.paths["train"])
+    logger.info("Writing test metrics to %s", metrics_logger.paths["test"])
     # Use EvaluationTracker for best model management
-    tracker = EvaluationTracker(evalDatasets, model, folder=folder, save_postfix="best")
+    tracker = EvaluationTracker(
+        evalDatasets,
+        model,
+        folder=folder,
+        save_postfix="best",
+        metrics_logger=metrics_logger,
+    )
     tracker.evaluate_gaze(epoch=0)  # evaluate loaded model
-    teacher_model.load(str(folder), postfix="best")
 
     # Create training loop using utilities
-    trainStep = create_training_loop(model, trainDataset)
+    teacher_idx = 0
+    trainStep = create_training_loop(model, trainDataset, metrics_logger=metrics_logger)
     for epoch in range(1, args.epochs + 1):
+        sleep_if_blackout_lock()
         trainStep(
-            desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}"
+            desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}",
+            epoch=epoch,
         )
         model.save(str(folder), postfix="latest")
-        if tracker.evaluate_gaze(epoch=epoch) and args.self_distill:
-            teacher_model.load(str(folder), postfix="best")
+        if tracker.evaluate_gaze(epoch=epoch) and teacher_models:
+            teacher_models[teacher_idx].load(str(folder), postfix="best")
+            teacher_models[teacher_idx].update_cache_id(f"Student-from-{epoch}")
+            teacher_idx = (teacher_idx + 1) % len(teacher_models)
 
         logger.info(tracker.last_output)
         if args.patience <= (epoch - tracker.best_epoch):
             logger.info("Early stopping")
             break
+    metrics_logger.close()
 
 
 if __name__ == "__main__":
@@ -302,7 +338,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch-per-epoch", type=int, default=-1)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--steps", type=int, default=5)
-    parser.add_argument("--no-embeddings", default=False, action="store_true")
+    parser.add_argument("--pop", default=False, action="store_true")
+    parser.add_argument("--reset", default=False, action="store_true")
+    parser.add_argument("--online", default=False, action="store_true")
     parser.add_argument(
         "--force",
         default=False,
@@ -311,8 +349,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--self-distill",
-        default=False,
-        action="store_true",
+        default=0,
+        type=int,
         help="Enable self-distillation.",
     )
     parser.add_argument("--folder", type=str, default=str(ROOT_FOLDER))

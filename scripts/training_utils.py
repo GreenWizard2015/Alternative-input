@@ -9,11 +9,17 @@ This module provides common functionality for training loops including:
 - Evaluation wrapper pattern
 """
 
+import atexit
+import csv
 import os
-import time
 import sys
+import tempfile
+import time
+import uuid
 from collections import defaultdict
-from typing import Any, Callable, List, Dict, Tuple, Set
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from Core.logging_config import get_logger
@@ -24,6 +30,112 @@ logger = get_logger(__name__)
 DISPLAY_FREQUENCY = 10  # Display summary every N iterations
 CLEAR_SCREEN_UNIX = "\033[2J\033[H"  # ANSI escape codes: clear screen and move to home
 CLEAR_SCREEN_WIN = "\033c"  # Windows clear screen escape sequence
+
+
+class MetricsCsvLogger:
+    """Write train and test metrics to two uniquely named CSV files.
+
+    The train CSV uses one row per training step and starts with ``epoch`` and
+    ``step``.  The test CSV uses one row per evaluation and starts with
+    ``epoch``.  Metric columns are added as they appear, which keeps this
+    logger usable for different model wrappers without a hard-coded metric
+    list.
+    """
+
+    BASE_FIELDS = {"train": ["epoch", "step"], "test": ["epoch"]}
+
+    def __init__(self, folder: Any, prefix: str = "metrics") -> None:
+        """Create a unique train/test CSV pair in ``folder``."""
+        self.folder = Path(folder)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        run_id = f"{timestamp}-{uuid.uuid4().hex}"
+        self.paths = {
+            split: self.folder / f"{split}-{prefix}-{run_id}.csv"
+            for split in self.BASE_FIELDS
+        }
+        self.train_path = self.paths["train"]
+        self.test_path = self.paths["test"]
+        self._fieldnames = {
+            split: list(fields) for split, fields in self.BASE_FIELDS.items()
+        }
+        self._files = {}
+        self._writers = {}
+        for split in self.BASE_FIELDS:
+            self._open_for_append(split)
+        atexit.register(self.close)
+
+    def _open_for_append(self, split: str) -> None:
+        path = self.paths[split]
+        file = path.open("a", newline="", encoding="utf-8")
+        self._files[split] = file
+        self._writers[split] = csv.DictWriter(file, fieldnames=self._fieldnames[split])
+        if path.stat().st_size == 0:
+            self._writers[split].writeheader()
+            file.flush()
+
+    @staticmethod
+    def _csv_value(value: Any) -> Any:
+        """Convert scalar-like metric values to values suitable for CSV."""
+        if value is None:
+            return ""
+        try:
+            array = np.asarray(value)
+            if array.size == 0:
+                return ""
+            return float(np.mean(array))
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _add_metric_fields(self, split: str, metrics: Dict[str, Any]) -> None:
+        new_fields = sorted(set(metrics) - set(self._fieldnames[split]))
+        if not new_fields:
+            return
+
+        # CSV headers cannot be extended in place.  Rewrite the existing
+        # rows only when a previously unseen metric is encountered.
+        path = self.paths[split]
+        self._files[split].close()
+        with path.open("r", newline="", encoding="utf-8") as source:
+            rows = list(csv.DictReader(source))
+
+        self._fieldnames[split].extend(new_fields)
+        with tempfile.NamedTemporaryFile(
+            "w", newline="", encoding="utf-8", dir=self.folder, delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            writer = csv.DictWriter(temporary, fieldnames=self._fieldnames[split])
+            writer.writeheader()
+            writer.writerows(rows)
+
+        os.replace(temporary_path, path)
+        self._open_for_append(split)
+
+    def log(
+        self,
+        split: str,
+        epoch: Any,
+        step: Any = "",
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append a train or test metrics row and flush it immediately."""
+        if split not in self.BASE_FIELDS:
+            raise ValueError(f"Unknown metrics split: {split}")
+        metrics = metrics or {}
+        self._add_metric_fields(split, metrics)
+        row = {name: "" for name in self._fieldnames[split]}
+        row["epoch"] = epoch
+        if split == "train":
+            row["step"] = step
+        row.update({key: self._csv_value(value) for key, value in metrics.items()})
+        self._writers[split].writerow(row)
+        self._files[split].flush()
+
+    def close(self) -> None:
+        """Flush and close the CSV file."""
+        for file in self._files.values():
+            if not file.closed:
+                file.close()
 
 
 def format_time(total_sec: float) -> str:
@@ -131,7 +243,9 @@ def create_progress_display(desc: str, total_samples: int) -> Callable:
     return format_progress_display
 
 
-def create_training_loop(model: Any, dataset: Any) -> Callable:
+def create_training_loop(
+    model: Any, dataset: Any, metrics_logger: Optional[MetricsCsvLogger] = None
+) -> Callable:
     """Create training step function for one epoch.
 
     Args:
@@ -157,7 +271,7 @@ def create_training_loop(model: Any, dataset: Any) -> Callable:
     if not hasattr(dataset, "sample"):
         raise ValueError("dataset must have a sample() method")
 
-    def training_step(desc: str) -> None:
+    def training_step(desc: str, epoch: Optional[int] = None) -> None:
         """Execute one training epoch with progress display.
 
         Args:
@@ -177,6 +291,8 @@ def create_training_loop(model: Any, dataset: Any) -> Callable:
             stats = model.fit(sampled)
             for k in stats.keys():
                 history[k].append(stats[k])
+            if metrics_logger is not None:
+                metrics_logger.log("train", epoch=epoch, step=step, metrics=stats)
 
             # Display summary every DISPLAY_FREQUENCY iterations
             if ((step + 1) % DISPLAY_FREQUENCY == 0) or step == 0:
@@ -226,6 +342,7 @@ class EvaluationTracker:
         model: Any,
         folder: Any = None,
         save_postfix: str = "best",
+        metrics_logger: Optional[MetricsCsvLogger] = None,
     ) -> None:
         """Initialize tracker with datasets and model.
 
@@ -252,10 +369,12 @@ class EvaluationTracker:
         self.model = model
         self.folder = folder
         self.save_postfix = save_postfix
+        self.metrics_logger = metrics_logger
         self.best_loss: float = np.inf
         self.best_epoch: int = 0
         self.losses: List[float] = [np.inf] * len(datasets)
         self.last_output = ""
+        self.last_metrics: Dict[str, float] = {}
 
     def _eval_dataset(self, dataset: Any) -> Tuple[Dict[str, float], int]:
         """Evaluate model on single dataset.
@@ -352,6 +471,10 @@ class EvaluationTracker:
             )
 
         mean_loss = all_metrics.get("total", np.inf)
+
+        self.last_metrics = all_metrics
+        if self.metrics_logger is not None:
+            self.metrics_logger.log("test", epoch=epoch, metrics=all_metrics)
 
         is_better = mean_loss < self.best_loss
         # Track best model

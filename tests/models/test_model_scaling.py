@@ -18,7 +18,7 @@ class TestComputeScaledDimensions:
         assert result["latent_size"] == 256
         assert result["eye_filters"] == [32, 32]
         assert result["num_heads"] == 16
-        assert result["dff_multiplier"] == 16
+        assert result["dff_multiplier"] == 4
         assert result["predictor_mlp_sizes"] == [128, 128, 128]
 
     def test_double_scaling(self):
@@ -28,7 +28,7 @@ class TestComputeScaledDimensions:
         assert result["latent_size"] == 512
         assert result["eye_filters"] == [64, 64]
         assert result["num_heads"] == 32
-        assert result["dff_multiplier"] == 32
+        assert result["dff_multiplier"] == 8
         assert result["predictor_mlp_sizes"] == [256, 256, 256]
 
     def test_half_scaling(self):
@@ -38,7 +38,7 @@ class TestComputeScaledDimensions:
         assert result["latent_size"] == 128
         assert result["eye_filters"] == [16, 16]
         assert result["num_heads"] == 8
-        assert result["dff_multiplier"] == 8
+        assert result["dff_multiplier"] == 2
         assert result["predictor_mlp_sizes"] == [64, 64, 64]
 
     def test_multi_head_attention_divisibility_identity(self):
@@ -181,7 +181,7 @@ class TestComputeScaledDimensions:
         # Check that scaling is roughly consistent (allowing for int rounding)
         expected_latent = int(256 * scale_mult)
         expected_eye_filter = int(32 * scale_mult)
-        expected_dff = int(16 * scale_mult)
+        expected_dff = int(4 * scale_mult)
 
         assert result["latent_size"] == expected_latent
         assert result["eye_filters"][0] == expected_eye_filter

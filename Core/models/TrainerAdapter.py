@@ -7,19 +7,14 @@ spaces through neural network adapters.
 from typing import List
 import tensorflow as tf
 import NN.Utils as NNU
+from NN.Utils import flatten
+import Core.losses as L
 
 from Core.logging_config import get_logger
-from Core.models.PredictionOutputTypes import PredictionOutput
-from NN.models.AdapterMLP import AdapterMLP
-from NN.models.ResidualAE import ResidualAE
-from Core.losses import calculate_losses
+from NN.models.ContrastiveEBM import ContrastiveEBM
+
 
 logger = get_logger(__name__)
-
-
-def partial_gradient(v, weight):
-    part = weight * v
-    return part + tf.stop_gradient(v - part)
 
 
 class TrainerAdapter:
@@ -29,187 +24,221 @@ class TrainerAdapter:
     teacher model latent spaces for effective knowledge distillation.
     """
 
-    _latents: AdapterMLP = None
-    _reconstruction_nograd: ResidualAE = None
-    _reconstruction: ResidualAE = None
+    _latents: ContrastiveEBM = None
+    _latents_nograd: ContrastiveEBM = None
 
-    def __init__(self, name, getter):
+    def __init__(self, name):
         super().__init__()
-        self._name = name
-        self._getter = getter
+        self.name = name
 
     @property
     def trainable_variables(self):
         """Get all trainable variables from the adapters."""
         res = []
-        for x in [self._latents, self._reconstruction]:
-            if x:
-                res.extend(x.trainable_variables)
+        parts = [self._latents]
+        for x in parts:
+            res.extend(x.trainable_variables)
         return res
 
-    def _update_reconstruction_nograd(self):
-        for a, b in zip(
-            self._reconstruction_nograd.weights, self._reconstruction.weights
-        ):
+    def _assign_weights(self, A, B):
+        for a, b in zip(A.weights, B.weights):
             a.assign(b)
 
-    def _create_if_needed(self, student_dim, teachers_dim):
+    def _update_latents_nograd(self):
+        self._assign_weights(self._latents_nograd, self._latents)
+        pass
+
+    def _create_if_needed(self, student_dim):
         if not self._latents:
-            self._latents = AdapterMLP(
-                teacher_dim=teachers_dim, student_dim=student_dim
-            )
+            self._latents = ContrastiveEBM(name="latents")
+            self._latents_nograd = ContrastiveEBM(name="latents_nograd")
+            self._latents_nograd.trainable = False
 
-        if not self._reconstruction:
-            self._reconstruction = ResidualAE(student_dim)
-            self._reconstruction_nograd = ResidualAE(student_dim)
-
-    def _normalize(self, v):
-        return NNU.normalize_std(v)
-
-    def _calc_regularization(self, v):
+    def _calc_regularization(self, v, scale):
         mean = tf.abs(tf.reduce_mean(v, axis=-1))
         mean = tf.maximum(mean - 1.0, 0.0)  # 0..1 - ok
         std = tf.abs(tf.math.reduce_std(v, axis=-1))
         std = tf.maximum(std - 1.0, 0.0)  # 0..1 - ok
-        return mean + std
+        loss = tf.reduce_mean(mean + std)
+        # stabilize training
+        loss /= tf.stop_gradient(tf.where(1.0 < loss, loss, 1.0))
+        return {"reg": loss * scale}
 
-    def _masked_loss(self, ypred, ytrue, mask):
-        mask = tf.cast(mask, ypred.dtype)
-        N = tf.reduce_sum(mask, axis=-1)
-        diff = ypred - ytrue
-        loss = tf.square(diff)
-        return tf.reduce_sum(loss * mask, axis=-1) / N
+    def _latents_sgld(self, teachers, loss_weights):
+        def ebm(z, mask):
+            flat_mask = tf.reshape(mask, (-1,))
+            shp = tf.shape(loss_weights)
+            N = shp[-1]
+            null_energy = tf.fill(shp, float("inf"))
+            null_energy = tf.reshape(null_energy, (-1, N))
+            w = tf.reshape(tf.boolean_mask(loss_weights, mask), (-1, N))
 
-    def _mi_loss(self, student_latents, N=10, keep_rate=0.5):
-        """
-        Calculate mutual information loss using a two-pass reconstruction approach with repulsion.
+            inputs = [z] + teachers
+            energy = self._latents_nograd(
+                flatten([tf.boolean_mask(x, mask) for x in inputs]),
+                training=False,
+            )
 
-        This method implements a self-supervised learning strategy that uses masked reconstruction
-        followed by repulsion learning to encourage redundancy and robustness in latent representations.
-        The approach uses two parallel reconstruction networks to separate learning objectives.
+            energy = tf.reshape(energy, tf.shape(w))
+            idx = tf.where(flat_mask)
+            energy = tf.tensor_scatter_nd_update(null_energy, idx, energy * w)
+            return tf.reshape(energy, shp)
 
-        Args:
-            student_latents: Student model latent representations (batch_size, latent_dim)
-            N: Number of negative samples to generate per original sample (default: 10)
-            keep_rate: Percentage of elements to keep (not mask) during reconstruction (default: 0.75)
+        def F(z):
+            return NNU.find_optimal_latents_sgld(
+                energy_model=ebm, z=z, max_steps=10, delta=1e-5
+            )
 
-        Returns:
-            Dictionary containing two loss components:
-            - mi_reconstruction: Loss from first pass learning to reconstruct masked features
-            - mi_repulsion: Repulsion loss from second pass that removes redundancy
+        return F
 
-            The combined loss encourages the model to learn robust representations that can
-            reconstruct from incomplete information while avoiding over-reliance on specific features.
+    def _latents_adam(self, teachers, loss_weights):
+        def ebm(z, mask):
+            tf.debugging.assert_rank_at_least(z, 2)
+            tf.debugging.assert_type(mask, tf.bool)
+            tf.debugging.assert_equal(tf.shape(z)[:-1], tf.shape(mask))
 
-        Detailed two-pass process:
-        1) Initialize reconstruction_nograd as a copy of reconstruction weights
-        2) Create N copies of student latents
-        3) Create binary mask with keep_rate probability for each element
-        4) First pass - reconstruction learning:
-           - Use stop_gradient on masked latents to prevent gradient flow
-           - Train reconstruction network to recover full latents from masked version
-           - Calculate reconstruction loss between predicted and target latents
-        5) Update reconstruction_nograd with current reconstruction weights
-        6) Second pass - repulsion learning:
-           - Use reconstruction_nograd (no gradient updates)
-           - Train on masked latents to recover unmasked portions
-           - Apply negative loss on unmasked portions to encourage redundancy removal
-           - Calculate repulsion loss with reversed sign for gradient maximization
+            extra_rank = tf.rank(z) - tf.rank(loss_weights)
+            tf.debugging.assert_greater_equal(extra_rank, 0)
+            extra_shape = tf.shape(z)[:extra_rank]
 
-        Mathematical rationale:
-        The first pass teaches the model to reconstruct from incomplete information,
-        while the second pass actively discourages the model from using predictable
-        patterns in unmasked portions. This creates a balance between reconstructive
-        capability and redundancy elimination, leading to more robust and generalizable
-        latent representations that are less sensitive to individual features.
-        """
-        student_latents = tf.repeat(student_latents, N, axis=0)
-        student_shp = tf.shape(student_latents)
+            weights, *expanded_teachers = [
+                tf.broadcast_to(x, tf.concat([extra_shape, tf.shape(x)], axis=0))
+                for x in [loss_weights] + teachers
+            ]
 
-        mask = tf.random.uniform(student_shp) < keep_rate
-        masked = tf.where(mask, student_latents, 0.0)
-        # first pass to learn masked->full
-        reconstructed = self._reconstruction(
-            {
-                "features": tf.stop_gradient(masked),
-                "mask": tf.cast(mask, tf.float32),
-            },
-            training=True,
+            tf.debugging.assert_equal(tf.shape(weights)[:-1], tf.shape(mask))
+            for teacher in expanded_teachers:
+                tf.debugging.assert_equal(tf.shape(teacher)[:-1], tf.shape(mask))
+
+            active_z = tf.boolean_mask(z, mask)
+            active_weights = tf.boolean_mask(weights, mask)
+            active_teachers = [tf.boolean_mask(x, mask) for x in expanded_teachers]
+
+            tf.debugging.assert_rank(active_z, 2)
+            tf.debugging.assert_rank(active_weights, 2)
+            tf.debugging.assert_equal(
+                tf.shape(active_z)[0], tf.shape(active_weights)[0]
+            )
+            tf.debugging.assert_greater(tf.shape(active_z)[0], 0)
+
+            energy = self._latents_nograd(
+                flatten([active_z] + active_teachers),
+                training=False,
+            )
+
+            tf.debugging.assert_equal(tf.shape(energy), tf.shape(active_weights))
+            tf.debugging.assert_all_finite(energy, "Non-finite EBM energy.")
+
+            energy *= tf.cast(active_weights, energy.dtype)
+
+            full_energy = tf.fill(tf.shape(weights), tf.cast(1e9, energy.dtype))
+            full_energy = tf.tensor_scatter_nd_update(
+                full_energy, tf.where(mask), energy
+            )
+
+            tf.debugging.assert_equal(tf.shape(full_energy), tf.shape(weights))
+            tf.debugging.assert_all_finite(full_energy, "Non-finite masked EBM energy.")
+            return full_energy
+
+        def F(z):
+            tf.debugging.assert_rank_at_least(z, 2)
+            result = NNU.find_optimal_latents_adam(
+                energy_model=ebm,
+                z=z,
+                max_steps=8,
+                num_candidates=8,
+                step_size=0.003,
+                step_decay=0.97,
+                max_distance=20.0,
+                initial_noise=0.005,
+                delta=0e-5,
+            )
+            tf.debugging.assert_equal(tf.shape(result["z"]), tf.shape(z))
+            tf.debugging.assert_equal(tf.shape(result["energy"]), tf.shape(z)[:-1])
+            tf.debugging.assert_equal(tf.shape(result["improvement"]), tf.shape(z)[:-1])
+            tf.debugging.assert_equal(tf.shape(result["distance"]), tf.shape(z)[:-1])
+            tf.debugging.assert_all_finite(result["z"], "Non-finite optimized latents.")
+            tf.debugging.assert_all_finite(
+                result["energy"], "Non-finite optimized energy."
+            )
+            tf.debugging.assert_all_finite(
+                result["improvement"], "Non-finite latent improvement."
+            )
+            tf.debugging.assert_all_finite(
+                result["distance"], "Non-finite latent distance."
+            )
+            return result
+
+        return F
+
+    def _distill_loss(
+        self,
+        student_latents,
+        teachers,
+        loss_weights,
+        best_index,
+        scale,
+    ):
+        self._update_latents_nograd()
+
+        w = flatten([loss_weights])[0]
+        best_index = tf.reshape(best_index, (-1,))
+        losses = self._latents.learn(
+            flatten([tf.stop_gradient(student_latents)] + teachers),
+            best_index=best_index,
         )
-        reconstructed = self._normalize(reconstructed)
-        loss_reconstruction = self._masked_loss(
-            reconstructed, tf.stop_gradient(student_latents), mask=tf.logical_not(mask)
-        )
-        loss_reconstruction += self._masked_loss(
-            reconstructed, tf.stop_gradient(student_latents), mask=mask
-        )
-        # second pass to remove redundency
-        self._update_reconstruction_nograd()
-        mask = tf.random.uniform(student_shp) < keep_rate
-        weights = tf.linspace(0.0, 10.0, student_shp[-1])[None, None]
-        masked = tf.where(mask, partial_gradient(student_latents, weights), 0.0)
-        reconstructed_nograd = self._reconstruction_nograd(
-            {
-                "features": masked,
-                "mask": tf.cast(mask, tf.float32),
-            },
-            training=False,
-        )
-        reconstructed_nograd = self._normalize(reconstructed_nograd)
-        loss_repulsion = self._masked_loss(
-            reconstructed_nograd,
-            tf.stop_gradient(student_latents),
-            mask=tf.logical_not(mask),
-        )
-        # high reconstruction loss => low repulsion
-        # low reconstruction loss => high repulsion
-        loss_repulsion = tf.math.log(loss_repulsion + 1e-6)
+        use_energy_distill = True
+        if use_energy_distill:
+            energy = self._latents_nograd(
+                flatten([student_latents] + teachers),
+                training=False,
+                best_index=best_index,
+            )
+            tf.debugging.assert_equal(tf.shape(energy), tf.shape(w))
+            losses["distil"] = tf.reduce_sum(energy * w, axis=-1) * scale
+        else:
+            target_latents = self._latents_adam(teachers, loss_weights)(
+                tf.stop_gradient(student_latents)
+            )
 
-        return {
-            "mi_reconstruction": loss_reconstruction,
-            "mi": -1e-2 * loss_repulsion,
-        }
+            losses["search_improvement"] = target_latents["improvement"]
+            losses["search_distance"] = target_latents["distance"]
 
-    def _distill_loss(self, student_latents, teachers, loss_weights):
-        predictions, y_target = {}, {}
-        reconstructed_teacher = self._latents(student_latents, training=True)
-        start_idx = 0
-        for idx, teacher_latent in enumerate(teachers):
-            sz = teacher_latent.shape[-1]
-            reconstructed = reconstructed_teacher[..., start_idx : start_idx + sz]
-            predictions[f"{idx}_teacher"] = self._normalize(reconstructed)
-            y_target[f"{idx}_teacher"] = teacher_latent
-            start_idx += sz
+            fraction = 1.0
+            target = tf.stop_gradient(
+                student_latents + fraction * (target_latents["z"] - student_latents)
+            )
+            latents_loss = L.huber_loss(target, student_latents)
+            losses["distil"] = tf.reduce_mean(latents_loss) * scale * 0.01
 
-        # calculate_losses computes loss for all latent keys
-        computed_losses = calculate_losses(predictions, y_target, training=True)
-        for idx, weight in enumerate(loss_weights):
-            computed_losses[f"{idx}_teacher"] *= weight
-        return computed_losses
+        return losses
 
     def calc_loss(
         self,
-        student: PredictionOutput,
-        teachers: List[PredictionOutput],
-        loss_weights: List[tf.Tensor],
+        student_latents: tf.Tensor,
+        teachers: List[tf.Tensor],
+        loss_weights: tf.Tensor,
+        best_index,
+        scale: float,
     ):
-        student_latents = self._normalize(self._getter(student))
-        teachers = [self._normalize(self._getter(v)) for v in teachers]
-        self._create_if_needed(
-            student_dim=student_latents.shape[-1],
-            teachers_dim=sum([v.shape[-1] for v in teachers], 0),
-        )
+        self._create_if_needed(student_latents.shape[-1])
 
         computed_losses = {
-            **self._distill_loss(student_latents, teachers, loss_weights),
-            **self._mi_loss(student_latents),
-            "reg": self._calc_regularization(student_latents),
+            **self._distill_loss(
+                student_latents,
+                teachers,
+                loss_weights,
+                best_index,
+                scale,
+            ),
+            # **self._calc_regularization(student_latents, scale=scale * 1e-4),
         }
-        return {f"{nm}_{self._name}": v for nm, v in computed_losses.items()}
+        return {f"{nm}_{self.name}": v for nm, v in computed_losses.items()}
 
     def _apply_io(self, f):
-        f(self._latents, f"adapter_{self._name}")
-        f(self._reconstruction, f"reconstruction_{self._name}")
+        f(self._latents, f"adapter_{self.name}")
+        # f(self._pos, f"adapter_pos_{self.name}")
+        pass
 
     def save_npz(self, model_path):
         """Save adapters to NPZ format.

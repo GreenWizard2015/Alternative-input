@@ -21,7 +21,6 @@ class sMLP(tf.keras.layers.Layer):
         sizes: List[int],
         activation: str = "linear",
         dropout: Optional[float] = None,
-        use_norm: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize MLP layer.
@@ -37,7 +36,6 @@ class sMLP(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         self.sizes = sizes
         self.activation = activation
-        self.use_norm = use_norm
         dropout = SMLP_GLOBAL_DROPOUT if dropout is None else dropout
         self.dropout = dropout
 
@@ -52,8 +50,6 @@ class sMLP(tf.keras.layers.Layer):
             if self.dropout > 0.0:
                 layers.append(L.Dropout(self.dropout, name=f"dropout-{i}"))
             layers.append(L.Dense(sz, activation=self.activation, name=f"dense-{i}"))
-            if self.use_norm:
-                layers.append(L.LayerNormalization(name=f"norm-{i}"))
 
         self._F = tf.keras.Sequential(layers, name="_F")
         self._F.build(input_shape)

@@ -292,7 +292,7 @@ class CoordsEncodingLayer(tf.keras.layers.Layer):
         self._gates = self.add_weight(
             name="CEL_gates",
             shape=(1, 1, self.config.N),
-            initializer=tf.keras.initializers.Zeros(),
+            initializer=tf.keras.initializers.Constant(1.0),
             trainable=True,
         )
 
@@ -418,6 +418,8 @@ class CoordsEncodingLayer(tf.keras.layers.Layer):
         # Compute base frequencies on the fly to avoid scope issues
         base_freq, freq_range = self._create_bands()
 
+        tf.debugging.assert_equal(tf.shape(base_freq), tf.shape(freq_range))
+        tf.debugging.assert_equal(tf.shape(base_freq), tf.shape(self._freq_deltas))
         coefficients = base_freq + tf.nn.tanh(self._freq_deltas) * freq_range
         frequency = tf.nn.softplus(self._frequency)
         return coefficients[None, None, None] * frequency[None, None, None]
@@ -564,3 +566,11 @@ class CoordsEncodingLayer(tf.keras.layers.Layer):
             return self._to_bands(freq)
 
         raise ValueError(f"Unknown scaling: {self.config.scaling}")
+
+
+class ShallowCoordsEncodingLayer(CoordsEncodingLayer):
+    def build(self, input_shape):
+        return super().build((*input_shape[:-1], 1, input_shape[-1]))
+
+    def call(self, coordinates, training=None):
+        return super().call(coordinates[..., None, :], training)[..., 0, :]

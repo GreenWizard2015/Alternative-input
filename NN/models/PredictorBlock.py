@@ -78,6 +78,7 @@ class PredictorBlock(NpzModelMixin, tf.keras.Model):
         self.mode = mode
         self.shift = shift
 
+        self._input_dropout = tf.keras.layers.Dropout(0.1)
         # Shared MLP for processing
         mlp_sizes = [128, 128, 128]
         if mode == "full":  # Wider for full mode
@@ -114,6 +115,7 @@ class PredictorBlock(NpzModelMixin, tf.keras.Model):
                 - 'right eye': Right eye image of shape (batch, seq_len, eye_size, eye_size)
                 - 'result': Gaze points of shape (batch, seq_len, 2)
         """
+        x = self._input_dropout(x, training=training)
         # Process through shared MLP
         x = self._mlp(x, training=training)
         x = self._mlp_norm(x, training=training)
@@ -122,9 +124,7 @@ class PredictorBlock(NpzModelMixin, tf.keras.Model):
         points = self._predictor_gaze(x, training=training)
         # Verify gaze points shape: (batch, seq_len, 2) for gaze coordinates
         tf.debugging.assert_rank(points, 3, message="Gaze points must be rank-3 tensor")
-        assert (
-            points.shape[-1] == 2
-        ), f"Expected 2 gaze coordinates, got {points.shape[-1]}"
+        tf.debugging.assert_equal(tf.shape(points)[-1], 2)
 
         if self.mode == "result":
             return {"result": points}

@@ -9,7 +9,7 @@ Individual exports use --target flag, all other exports are always consolidated.
 
 Usage:
     # Export specific target (individual model/layer) - uses random weights
-    conda run -n myenv python export_js.py --target AdapterMLP --output ../web-client/src/models/
+    conda run -n myenv python export_js.py --target ContrastiveEBM --output ../web-client/src/models/
     conda run -n myenv python export_js.py --target sMLP --output ../web-client/src/models/
 
     # Export all weights to single consolidated ModelWrapper.zip from checkpoint

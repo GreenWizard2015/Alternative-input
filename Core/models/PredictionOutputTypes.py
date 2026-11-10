@@ -32,6 +32,14 @@ class PredictionOutput(NamedTuple):
             raw=None,
         )
 
+    def stop_gradient(self):
+        return PredictionOutput(
+            intermediate_latents=tf.stop_gradient(self.intermediate_latents),
+            latents=tf.stop_gradient(self.latents),
+            result=tf.stop_gradient(self.result),
+            raw=None,
+        )
+
 
 class PredictionOutputNumpy(NamedTuple):
     """Structured numpy output from gaze prediction pipeline.

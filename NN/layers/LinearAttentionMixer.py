@@ -132,8 +132,8 @@ class LinearAttentionMixer(tf.keras.layers.Layer):
         self.feature_dim = input_shape[-1]
 
         # Calculate n_heads using for loop to find maximum possible
-        self.n_heads = 0
-        for possible_dim in range(self.feature_dim, 1, -1):
+        self.n_heads = 1
+        for possible_dim in range(self.max_dim, 1, -1):
             if self.feature_dim % possible_dim == 0:
                 self.n_heads = self.feature_dim // possible_dim
                 break
@@ -145,11 +145,14 @@ class LinearAttentionMixer(tf.keras.layers.Layer):
                 f"Ensure input shape[-1] % n_heads == 0."
             )
 
-        # Create scale factor in build()
+        head_dim = self.feature_dim // self.n_heads
+
+        # Create scale factor in build(). Use the standard attention scale so
+        # attention logits and their projection weights are active from step 1.
         self.scale_factor = self.add_weight(
             name="attention_scale",
             shape=(),
-            initializer=tf.keras.initializers.Constant(0.0),
+            initializer=tf.keras.initializers.Constant(head_dim**-0.5),
             trainable=True,
             dtype=tf.float32,
         )
@@ -217,8 +220,9 @@ class LinearAttentionMixer(tf.keras.layers.Layer):
         features_3d = tf.reshape(features, [batch_size, spatial_dim, feature_dim])
 
         # Split features into heads: (batch, spatial, n_heads, head_dim)
+        head_dim = self.feature_dim // self.n_heads
         features_reshaped = tf.reshape(
-            features_3d, [batch_size, spatial_dim, self.n_heads, -1]
+            features_3d, [batch_size, spatial_dim, self.n_heads, head_dim]
         )
         # Transpose to (batch, n_heads, spatial, head_dim)
         features_heads = tf.transpose(features_reshaped, [0, 2, 1, 3])
@@ -255,8 +259,7 @@ class LinearAttentionMixer(tf.keras.layers.Layer):
             [batch_size, spatial_dim, self.n_outputs * self.n_heads, 1],
         )
 
-        # Calculate head_dim and reshape features for batched operations
-        head_dim = self.feature_dim // self.n_heads
+        # Reshape features for batched operations
         features_flat = tf.tile(
             tf.reshape(
                 features_spatial, [batch_size, spatial_dim, self.n_heads, head_dim]
@@ -271,8 +274,7 @@ class LinearAttentionMixer(tf.keras.layers.Layer):
         # Pool across spatial: (batch, n_outputs*n_heads, head_dim)
         pooled_flat = tf.reduce_sum(weighted_features, axis=1)
 
-        # Calculate head_dim and reshape to separate outputs and heads: (batch, n_outputs, n_heads, head_dim)
-        head_dim = self.feature_dim // self.n_heads
+        # Reshape to separate outputs and heads: (batch, n_outputs, n_heads, head_dim)
         pooled_4d = tf.reshape(
             pooled_flat, [batch_size, self.n_outputs, self.n_heads, head_dim]
         )

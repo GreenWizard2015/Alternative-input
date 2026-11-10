@@ -126,7 +126,6 @@ def _applyMasking_helper(src, maskSize, maskFraction=0.3):
     imageSize = shp[1:3]
     mask = tf.image.resize(mask, imageSize, method="nearest")
     mask = tf.reshape(mask, shp)
-    tf.assert_equal(tf.shape(mask), shp)
     # apply mask to source image
     maskValue = tf.random.uniform((B, 1, 1), minval=0.0, maxval=1.0)
     return src * mask + (1.0 - mask) * maskValue

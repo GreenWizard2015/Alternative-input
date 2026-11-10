@@ -66,7 +66,7 @@ class TransformerEncoderBlock(tf.keras.layers.Layer):
         d_model: int = 128,
         max_dim: int = 16,
         dff: Optional[int] = None,
-        dropout_rate: float = 0.1,
+        dropout_rate: float = 0.01,
         **kwargs: Any,
     ) -> None:
         """Initialize TransformerEncoderBlock.
@@ -98,8 +98,6 @@ class TransformerEncoderBlock(tf.keras.layers.Layer):
         self.dff = dff
         self.dropout_rate = dropout_rate
 
-        # Store sublayer names directly
-
     def build(self, input_shape) -> None:
         """Build layer with sublayer creation.
 
@@ -109,12 +107,16 @@ class TransformerEncoderBlock(tf.keras.layers.Layer):
         Raises:
             ValueError: If d_model % num_heads != 0.
         """
-        # Calculate num_heads using for loop to find maximum possible (same as LinearAttentionMixer)
-        self.num_heads = 0
-        for possible_dim in range(self.d_model, 1, -1):
+        # Calculate num_heads using for loop to find maximum possible (same as LinearAttentionMixer).
+        self.num_heads = None
+        for possible_dim in range(self.max_dim, 1, -1):
             if self.d_model % possible_dim == 0:
                 self.num_heads = self.d_model // possible_dim
                 break
+
+        # Validate that max_dim divides d_model evenly (same as LinearAttentionMixer logic)
+        if self.num_heads is None:
+            raise ValueError(f"d_model ({self.d_model}) can't be a prime number.")
 
         # Validate that max_dim divides d_model evenly (same as LinearAttentionMixer logic)
         if self.d_model % self.num_heads != 0:
@@ -143,7 +145,6 @@ class TransformerEncoderBlock(tf.keras.layers.Layer):
                     name="ffn_inner",
                 ),
                 tf.keras.layers.Dense(self.d_model, name="ffn_output"),
-                tf.keras.layers.Dropout(rate=self.dropout_rate),
             ],
             name="feed_forward_network",
         )

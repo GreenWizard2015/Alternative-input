@@ -22,6 +22,7 @@ from Core.models import FilterWrapper
 from scripts.training_utils import (
     create_training_loop,
     EvaluationTracker,
+    MetricsCsvLogger,
     format_epoch_desc,
 )
 from Core.logging_config import get_logger
@@ -105,18 +106,28 @@ def main(args: argparse.Namespace) -> None:
 
     # Setup evaluation datasets for EvaluationTracker
     evalDatasets = [test_loader]
+    metrics_logger = MetricsCsvLogger(save_folder)
+    logger.info("Writing train metrics to %s", metrics_logger.paths["train"])
+    logger.info("Writing test metrics to %s", metrics_logger.paths["test"])
 
     # Use EvaluationTracker for best model management
     tracker = EvaluationTracker(
-        evalDatasets, model_wrapper, folder=save_folder, save_postfix="best"
+        evalDatasets,
+        model_wrapper,
+        folder=save_folder,
+        save_postfix="best",
+        metrics_logger=metrics_logger,
     )
     tracker.evaluate_gaze(epoch=0)  # evaluate loaded model
 
     # Create training loop using utilities
-    trainStep = create_training_loop(model_wrapper, train_loader)
+    trainStep = create_training_loop(
+        model_wrapper, train_loader, metrics_logger=metrics_logger
+    )
     for epoch in range(1, args.epochs + 1):
         trainStep(
-            desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}"
+            desc=f"{tracker.last_output}\n\n{format_epoch_desc(epoch, args.epochs)}",
+            epoch=epoch,
         )
         model_wrapper.save(str(save_folder), postfix="latest")
         tracker.evaluate_gaze(epoch=epoch)  # evaluate loaded model
@@ -125,6 +136,7 @@ def main(args: argparse.Namespace) -> None:
             logger.info("Early stopping")
             break
 
+    metrics_logger.close()
     logger.info("Training completed!")
 
 

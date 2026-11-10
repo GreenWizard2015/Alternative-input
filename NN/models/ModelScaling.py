@@ -63,7 +63,7 @@ def compute_scaled_dimensions(latent_size: int, scale_mult: float) -> Dict[str, 
         "latent_size": scaled_latent_size,
         "eye_filters": [int(32 * scale_mult), int(32 * scale_mult)],
         "num_heads": num_heads,  # Validated to divide latent_size
-        "dff_multiplier": int(16 * scale_mult),
+        "dff_multiplier": max(1, int(4 * scale_mult)),
         "predictor_mlp_sizes": [
             int(128 * scale_mult),
             int(128 * scale_mult),
